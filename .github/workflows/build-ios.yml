@@ -57,11 +57,22 @@ jobs:
 
       - name: Package unsigned IPA
         run: |
-          APP_PATH=$(find "$DERIVED_DATA/Build/Products" -type d -name 'miniEXView.app' -print -quit)
-          test -n "$APP_PATH"
+          APP_PATH="$DERIVED_DATA/Build/Products/$CONFIGURATION-iphoneos/miniEXView.app"
+          test -d "$APP_PATH"
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist")
+          test -n "$EXECUTABLE"
+          test -f "$APP_PATH/$EXECUTABLE"
+          file "$APP_PATH/$EXECUTABLE" | grep -q 'arm64'
           mkdir -p Payload
           ditto "$APP_PATH" Payload/miniEXView.app
           ditto -c -k --sequesterRsrc --keepParent Payload miniEXView-unsigned.ipa
+
+      - name: Verify IPA executable
+        run: |
+          rm -rf verify-ipa
+          ditto -x -k miniEXView-unsigned.ipa verify-ipa
+          test -f verify-ipa/Payload/miniEXView.app/miniEXView
+          file verify-ipa/Payload/miniEXView.app/miniEXView | grep -q 'arm64'
 
       - name: Upload unsigned iPhone IPA
         uses: actions/upload-artifact@v4
