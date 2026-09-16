@@ -10,12 +10,13 @@
 		B00000000000000000000004 = {isa = PBXBuildFile; fileRef = C00000000000000000000004;};
 		B00000000000000000000005 = {isa = PBXBuildFile; fileRef = C00000000000000000000005;};
 		B00000000000000000000006 = {isa = PBXBuildFile; fileRef = C00000000000000000000006;};
+		B00000000000000000000007 = {isa = PBXBuildFile; fileRef = C00000000000000000000008;};
 		A00000000000000000000001 = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; TargetAttributes = {A00000000000000000000002 = {CreatedOnToolsVersion = 16.0;}; A00000000000000000000003 = {CreatedOnToolsVersion = 16.0; TestTargetID = A00000000000000000000002;};};}; buildConfigurationList = A00000000000000000000010; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; knownRegions = (en, Base); mainGroup = A00000000000000000000004; productRefGroup = A00000000000000000000005; projectDirPath = ""; projectRoot = ""; targets = (A00000000000000000000002, A00000000000000000000003);};
 		A00000000000000000000002 = {isa = PBXNativeTarget; buildConfigurationList = A00000000000000000000011; buildPhases = (A00000000000000000000020, A00000000000000000000021, A00000000000000000000022); buildRules = (); dependencies = (); name = miniEXView; productName = miniEXView; productReference = A00000000000000000000006; productType = "com.apple.product-type.application";};
 		A00000000000000000000003 = {isa = PBXNativeTarget; buildConfigurationList = A00000000000000000000012; buildPhases = (A00000000000000000000023, A00000000000000000000024, A00000000000000000000025); buildRules = (); dependencies = (A00000000000000000000030); name = miniEXViewTests; productName = miniEXViewTests; productReference = A00000000000000000000007; productType = "com.apple.product-type.bundle.unit-test";};
 		A00000000000000000000004 = {isa = PBXGroup; children = (A00000000000000000000008, A00000000000000000000009, A00000000000000000000005, A0000000000000000000000A); sourceTree = "<group>";};
 		A00000000000000000000005 = {isa = PBXGroup; children = (A00000000000000000000006, A00000000000000000000007); name = Products; sourceTree = "<group>";};
-		A00000000000000000000008 = {isa = PBXGroup; children = (C00000000000000000000001, C00000000000000000000002, C00000000000000000000003, C00000000000000000000004, C00000000000000000000005, C00000000000000000000007); path = miniEXView; sourceTree = "<group>";};
+		A00000000000000000000008 = {isa = PBXGroup; children = (C00000000000000000000001, C00000000000000000000002, C00000000000000000000003, C00000000000000000000004, C00000000000000000000005, C00000000000000000000008, C00000000000000000000007); path = miniEXView; sourceTree = "<group>";};
 		A00000000000000000000009 = {isa = PBXGroup; children = (C00000000000000000000006); path = miniEXViewTests; sourceTree = "<group>";};
 		A0000000000000000000000A = {isa = PBXFileReference; lastKnownFileType = text.markdown; path = README.md; sourceTree = "<group>";};
 		A00000000000000000000006 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = miniEXView.app; sourceTree = BUILT_PRODUCTS_DIR;};
@@ -27,7 +28,8 @@
 		C00000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>";};
 		C00000000000000000000006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTests.swift; sourceTree = "<group>";};
 		C00000000000000000000007 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>";};
-		A00000000000000000000020 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B00000000000000000000001, B00000000000000000000002, B00000000000000000000003, B00000000000000000000004, B00000000000000000000005); runOnlyForDeploymentPostprocessing = 0;};
+		C00000000000000000000008 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserParameters.swift; sourceTree = "<group>";};
+		A00000000000000000000020 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B00000000000000000000001, B00000000000000000000002, B00000000000000000000003, B00000000000000000000004, B00000000000000000000005, B00000000000000000000007); runOnlyForDeploymentPostprocessing = 0;};
 		A00000000000000000000021 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
 		A00000000000000000000022 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
 		A00000000000000000000023 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B00000000000000000000006); runOnlyForDeploymentPostprocessing = 0;};

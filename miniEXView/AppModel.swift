@@ -13,6 +13,8 @@ struct MeasuredRecord: Identifiable, Codable {
     @Published var connectionState = "Odpojeno"; @Published var status = "Připraveno"; @Published var isConnected = false
     @Published var pixels = Array(repeating: Color.black, count: 160 * 128); @Published var records: [MeasuredRecord] = []
     @Published var parameters = DeviceParameters(); @Published var firmware = "—"; @Published var serial = "—"
+    @Published private(set) var parameterBounds = MiniEXParameterBounds.defaults
+    private var firmwareVersion: MiniEXFirmwareVersion?
     private let transport: MiniEXTransport = TCPTransport(); private let decoder = PacketStreamDecoder()
     init() {
         transport.onState = { [weak self] value in Task { @MainActor in self?.connectionState = value; self?.isConnected = value == "Připojeno"; if value == "Připojeno" { self?.startRemote() } } }
@@ -34,7 +36,14 @@ struct MeasuredRecord: Identifiable, Codable {
         requests.forEach { sendCM($0) }
         status = "Načítám nastavení…"
     }
-    func saveSettings() { sendCM(WireMessage.setParameters, payload: parameters.encode()); status = "Nastavení odesláno." }
+    func saveSettings() {
+        do {
+            let wireValues = parameters.wireValues(bounds: parameterBounds)
+            let payload = try MiniEXUserParametersCodec.encodeValues(wireValues, dataTypeSize: firmwareVersion?.dataTypeSize ?? 3)
+            sendCM(WireMessage.setParameters, payload: payload)
+            status = "Nastavení odesláno."
+        } catch { status = error.localizedDescription }
+    }
     func restoreDefaults() { sendCM(WireMessage.defaults); parameters = DeviceParameters(); status = "Výchozí nastavení vyžádáno." }
     func refreshData() { status = "Načítám data…"; sendCM(0x0B01); sendCM(0x0B06); sendCM(0x0501, target: 6) }
     func eraseData() { sendCM(0x0502, target: 6); records = []; status = "Požadavek na smazání odeslán." }
@@ -79,13 +88,25 @@ struct MeasuredRecord: Identifiable, Codable {
     private func consume(_ data: Data) { do { for packet in try decoder.append(data) { for message in try CMCodec.decodeAll(packet.payload) { handle(message) } } } catch { status = error.localizedDescription } }
     private func handle(_ m: CMMessage) {
         switch m.messageID {
-        case WireMessage.getFirmware where m.payload.count >= 2: let w = Int(m.payload[0]) | Int(m.payload[1]) << 8; firmware = "\((w & 0x1f00) >> 8).\(String(format:"%02X", w & 0xff))"
+        case WireMessage.getFirmware:
+            firmwareVersion = try? MiniEXFirmwareVersion.decode(m.payload)
+            if let version = firmwareVersion { firmware = "\(version.modelName), FW \(version.displayName)" }
         case WireMessage.getSerial where m.payload.count >= 4:
             var serialValue: UInt32 = 0
             for byteIndex in 0..<4 {
                 serialValue |= UInt32(m.payload[byteIndex]) << UInt32(byteIndex * 8)
             }
             serial = String(serialValue)
+        case WireMessage.getBounds:
+            do { parameterBounds = try MiniEXUserParametersCodec.decodeBounds(m.payload); status = "Meze parametrů načteny." }
+            catch { status = error.localizedDescription }
+        case WireMessage.getParameters:
+            do {
+                let size = firmwareVersion?.dataTypeSize ?? 3
+                let values = try MiniEXUserParametersCodec.decodeValues(m.payload, dataTypeSize: size).normalized(to: parameterBounds)
+                parameters = DeviceParameters(wireValues: values, bounds: parameterBounds)
+                status = "Nastavení načteno."
+            } catch { status = error.localizedDescription }
         case WireMessage.stream: renderStream(m.payload)
         default: status = "Přijata zpráva 0x\(String(m.messageID, radix: 16))"
         }
@@ -96,19 +117,38 @@ struct MeasuredRecord: Identifiable, Codable {
 struct DeviceParameters {
     var wideZero = 1000.0, wideAlarm = 200.0, advancedZero = 1000.0, advancedAlarm = 200.0, tatpZero = 1000.0, tatpAlarm = 200.0
     var offTime = 600.0, sampling = 15.0, beep = 5.0, alarm = 5.0, irPower = 0.0; var wifi = false; var primaryLanguage = 1; var secondaryLanguage = 1; var mode = 0
-    func encode() -> Data {
-        let flags = (primaryLanguage << 1) | (secondaryLanguage << 4) | (mode << 7) | (wifi ? 1 : 0)
-        let rawValues: [Double] = [
-            wideZero, wideAlarm, offTime * 16, sampling * 16, beep, alarm,
-            Double(flags), irPower, advancedZero, advancedAlarm, tatpZero, tatpAlarm, 0
-        ]
-        var words = rawValues.map { UInt16(clamping: Int($0)) }
-        words.append(1)
-        var data = Data(capacity: words.count * 2)
-        for word in words {
-            data.append(UInt8(word & 0xff))
-            data.append(UInt8(word >> 8))
-        }
-        return data
+    init() {}
+    init(wireValues: MiniEXUserParameters, bounds: MiniEXParameterBounds) {
+        let raw = wireValues.raw
+        wideZero = MiniEXUserParametersCodec.rawToDisplay(parameter: 0, raw: raw[0], scale: bounds.rawScale(0))
+        wideAlarm = MiniEXUserParametersCodec.rawToDisplay(parameter: 1, raw: raw[1], scale: bounds.rawScale(1))
+        offTime = MiniEXUserParametersCodec.rawToDisplay(parameter: 2, raw: raw[2], scale: bounds.rawScale(2))
+        sampling = MiniEXUserParametersCodec.rawToDisplay(parameter: 3, raw: raw[3], scale: bounds.rawScale(3))
+        beep = Double(raw[4]); alarm = Double(raw[5]); irPower = Double(raw[7])
+        advancedZero = MiniEXUserParametersCodec.rawToDisplay(parameter: 8, raw: raw[8], scale: bounds.rawScale(8))
+        advancedAlarm = MiniEXUserParametersCodec.rawToDisplay(parameter: 9, raw: raw[9], scale: bounds.rawScale(9))
+        tatpZero = MiniEXUserParametersCodec.rawToDisplay(parameter: 10, raw: raw[10], scale: bounds.rawScale(10))
+        tatpAlarm = MiniEXUserParametersCodec.rawToDisplay(parameter: 11, raw: raw[11], scale: bounds.rawScale(11))
+        let flags = raw[MiniEXUserParametersCodec.bitConfigIndex]
+        wifi = flags & MiniEXUserParametersCodec.wifiMask != 0
+        primaryLanguage = MiniEXUserParametersCodec.languageID(bitConfig: flags, primary: true)
+        secondaryLanguage = MiniEXUserParametersCodec.languageID(bitConfig: flags, primary: false)
+        mode = wireValues.modeIndex
+    }
+    func wireValues(bounds: MiniEXParameterBounds) -> MiniEXUserParameters {
+        var raw = MiniEXUserParameters.defaults.raw
+        let displays = [wideZero, wideAlarm, offTime, sampling, beep, alarm]
+        for index in displays.indices { raw[index] = MiniEXUserParametersCodec.displayToRaw(parameter: index, display: displays[index], scale: bounds.rawScale(index)) }
+        raw[7] = Int(irPower)
+        raw[8] = MiniEXUserParametersCodec.displayToRaw(parameter: 8, display: advancedZero, scale: bounds.rawScale(8))
+        raw[9] = MiniEXUserParametersCodec.displayToRaw(parameter: 9, display: advancedAlarm, scale: bounds.rawScale(9))
+        raw[10] = MiniEXUserParametersCodec.displayToRaw(parameter: 10, display: tatpZero, scale: bounds.rawScale(10))
+        raw[11] = MiniEXUserParametersCodec.displayToRaw(parameter: 11, display: tatpAlarm, scale: bounds.rawScale(11))
+        var flags = wifi ? MiniEXUserParametersCodec.wifiMask : 0
+        flags = MiniEXUserParametersCodec.withLanguageID(bitConfig: flags, primary: true, languageID: primaryLanguage)
+        flags = MiniEXUserParametersCodec.withLanguageID(bitConfig: flags, primary: false, languageID: secondaryLanguage)
+        flags = (flags & ~MiniEXUserParametersCodec.modeMask) | ((mode << MiniEXUserParametersCodec.modeShift) & MiniEXUserParametersCodec.modeMask)
+        raw[MiniEXUserParametersCodec.bitConfigIndex] = flags
+        return MiniEXUserParameters(raw: raw)
     }
 }
