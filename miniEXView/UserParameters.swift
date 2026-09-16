@@ -35,7 +35,7 @@ struct MiniEXFirmwareVersion: Equatable {
         return .init(rawWord: word, firmwareCode: code, major: Int((code & 0x1f00) >> 8), minor: Int(code & 0xff), model: Int((word >> 13) & 7))
     }
     static func decode(_ data: Data) throws -> MiniEXFirmwareVersion {
-        guard data.count == 2 else { throw CodecError.malformed("Odpověď firmware musí mít 2 bajty.") }
+        guard data.count == 2 else { throw CodecError.malformed("Firmware reply must contain 2 bytes.") }
         return from(word: UInt16(MiniEXUserParametersCodec.readU16(data, at: 0)))
     }
 }
@@ -87,10 +87,10 @@ enum MiniEXUserParametersCodec {
 
     static func boundIndex(for parameter: Int) -> Int { precondition((0..<13).contains(parameter)); return parameterToBound[parameter] }
     static func valueCount(dataTypeSize: Int) throws -> Int {
-        switch dataTypeSize { case 1: return 8; case 2: return 10; case 3: return 13; default: throw CodecError.malformed("Nepodporovaný typ parametrů \(dataTypeSize).") }
+        switch dataTypeSize { case 1: return 8; case 2: return 10; case 3: return 13; default: throw CodecError.malformed("Unsupported parameter type \(dataTypeSize).") }
     }
     static func decodeBounds(_ data: Data) throws -> MiniEXParameterBounds {
-        guard data.count == 48 else { throw CodecError.malformed("Meze parametrů musí mít 48 bajtů.") }
+        guard data.count == 48 else { throw CodecError.malformed("Parameter limits must contain 48 bytes.") }
         var minimum = Array(repeating: 0, count: 8), maximum = minimum, scale = minimum
         for i in 0..<8 { minimum[i] = readU16(data, at: i * 2); maximum[i] = readU16(data, at: 16 + i * 2); scale[i] = readS16(data, at: 32 + i * 2) }
         for i in 0..<8 where scale[i] < 0 { minimum[i] = signExtend16(minimum[i]); maximum[i] = signExtend16(maximum[i]) }
@@ -100,17 +100,17 @@ enum MiniEXUserParametersCodec {
         let count = try valueCount(dataTypeSize: dataTypeSize); var output = Data(repeating: 0, count: (count + 1) * 2)
         for i in 0..<count {
             let value = values.raw[i]
-            if i == userHFIndex { guard (-32768...32767).contains(value) else { throw CodecError.malformed("UserHf je mimo Int16.") } }
-            else { guard (0...65535).contains(value) else { throw CodecError.malformed("Parametr \(i) je mimo UInt16.") } }
+            if i == userHFIndex { guard (-32768...32767).contains(value) else { throw CodecError.malformed("UserHf is outside Int16.") } }
+            else { guard (0...65535).contains(value) else { throw CodecError.malformed("Parametr \(i) is outside UInt16.") } }
             writeU16(&output, at: i * 2, value: value)
         }
         let valid = values.valid == 0 ? 1 : values.valid
-        guard (0...65535).contains(valid) else { throw CodecError.malformed("Příznak valid je mimo UInt16.") }
+        guard (0...65535).contains(valid) else { throw CodecError.malformed("Valid flag is outside UInt16.") }
         writeU16(&output, at: count * 2, value: valid); return output
     }
     static func decodeValues(_ data: Data, dataTypeSize: Int) throws -> MiniEXUserParameters {
         let count = try valueCount(dataTypeSize: dataTypeSize), expected = (count + 1) * 2
-        guard data.count == expected else { throw CodecError.malformed("Parametry musí mít \(expected) bajtů.") }
+        guard data.count == expected else { throw CodecError.malformed("Parameters must contain \(expected) bytes.") }
         var raw = MiniEXUserParameters.defaults.raw
         for i in 0..<count { raw[i] = i == userHFIndex ? readS16(data, at: i * 2) : readU16(data, at: i * 2) }
         if count < userParameterCount { for i in count..<userParameterCount { raw[i] = 0 } }

@@ -46,7 +46,7 @@ podporovaný síťový adaptér bez změn UI a protokolu.
 1. Nahrajte obsah této složky do kořene GitHub repozitáře.
 2. Po každém commitu do větve `main` se automaticky spustí sestavení `Release`.
 3. Volitelně otevřete **Actions → Build iOS → Run workflow** a spusťte `Release` nebo `Debug` ručně.
-4. Po úspěšném běhu stáhněte artefakt `miniEXView-v0.9.7-build8-iPhone-unsigned-Release`.
+4. Po úspěšném běhu stáhněte artefakt `miniEXView-v0.9.8-build9-iPhone-unsigned-Release`.
 
 Workflow se spouští po commitu do `main` i ručně. Nejdříve ověří šest přiložených záznamů a
 provede testy dekodéru na iOS simulátoru, poté sestaví IPA pro fyzický telefon.

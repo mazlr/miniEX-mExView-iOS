@@ -36,21 +36,21 @@ final class TCPTransport: MiniEXTransport {
                 using: .tcp
             )
             connection = current
-            onState?("Připojuji…")
+            onState?("Connecting…")
             current.stateUpdateHandler = { [weak self, weak current] state in
                 guard let self, let current, self.connection === current else { return }
                 switch state {
                 case .ready:
                     self.ready = true
-                    self.onState?("Připojeno")
+                    self.onState?("Connected")
                     self.receive(from: current)
                 case .waiting(let error):
                     self.ready = false
-                    self.onState?("Čekám na síť: \(error.localizedDescription)")
+                    self.onState?("Waiting for network: \(error.localizedDescription)")
                 case .failed(let error):
-                    self.close(current, reason: "Chyba socketu: \(error.localizedDescription)")
+                    self.close(current, reason: "Socket error: \(error.localizedDescription)")
                 case .cancelled:
-                    self.close(current, reason: "Odpojeno: spojení zrušeno")
+                    self.close(current, reason: "Disconnected: connection cancelled")
                 default:
                     break
                 }
@@ -62,13 +62,13 @@ final class TCPTransport: MiniEXTransport {
     func send(_ data: Data) {
         queue.async { [self] in
             guard let current = connection, ready else {
-                onWrite?(data.count, "Socket není připraven.")
+                onWrite?(data.count, "Socket is not ready.")
                 return
             }
             current.send(content: data, completion: .contentProcessed { [weak self, weak current] error in
                 guard let self, let current, self.connection === current else { return }
                 self.onWrite?(data.count, error?.localizedDescription)
-                if let error { self.close(current, reason: "Chyba zápisu: \(error.localizedDescription)") }
+                if let error { self.close(current, reason: "Write error: \(error.localizedDescription)") }
             })
         }
     }
@@ -76,7 +76,7 @@ final class TCPTransport: MiniEXTransport {
     func disconnect() {
         queue.async { [self] in
             guard let current = connection else { return }
-            close(current, reason: "Odpojeno uživatelem")
+            close(current, reason: "Disconnected by user")
         }
     }
 
@@ -85,9 +85,9 @@ final class TCPTransport: MiniEXTransport {
             guard let self, let current, self.connection === current else { return }
             if let data, !data.isEmpty { self.onRawData?(data); self.onData?(data) }
             if let error {
-                self.close(current, reason: "Chyba čtení: \(error.localizedDescription)")
+                self.close(current, reason: "Read error: \(error.localizedDescription)")
             } else if complete {
-                self.close(current, reason: "Odpojeno: vzdálený přístroj uzavřel TCP (EOF)")
+                self.close(current, reason: "Disconnected: device closed TCP (EOF)")
             } else {
                 self.receive(from: current)
             }

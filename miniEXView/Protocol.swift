@@ -14,14 +14,14 @@ enum AlphaHex {
         return stride(from: (digits - 1) * 4, through: 0, by: -4).map { String(UnicodeScalar(65 + ((value >> $0) & 15))!) }.joined()
     }
     static func decode(_ text: Substring) throws -> Int {
-        guard !text.isEmpty, text.count <= 8 else { throw CodecError.malformed("Neplatná délka AlphaHex.") }
+        guard !text.isEmpty, text.count <= 8 else { throw CodecError.malformed("Invalid AlphaHex length.") }
         return try text.reduce(0) { result, c in
-            guard let a = c.asciiValue, a >= 65, a <= 80 else { throw CodecError.malformed("Neplatný znak AlphaHex: \(c)") }
+            guard let a = c.asciiValue, a >= 65, a <= 80 else { throw CodecError.malformed("Invalid AlphaHex character: \(c)") }
             return (result << 4) | Int(a - 65)
         }
     }
     static func data(_ text: Substring) throws -> Data {
-        guard text.count.isMultiple(of: 2) else { throw CodecError.malformed("AlphaHex data nemají sudou délku.") }
+        guard text.count.isMultiple(of: 2) else { throw CodecError.malformed("AlphaHex data must have even length.") }
         var result = Data(); var i = text.startIndex
         while i < text.endIndex { let j = text.index(i, offsetBy: 2); result.append(UInt8(try decode(text[i..<j]))); i = j }
         return result
@@ -48,7 +48,7 @@ final class PacketStreamDecoder {
     func reset() { buffer.removeAll(keepingCapacity: true) }
     func append(_ bytes: Data) throws -> [MiniEXPacket] {
         buffer.append(contentsOf: bytes); var packets: [MiniEXPacket] = []
-        guard buffer.count <= 65536 else { buffer.removeAll(); throw CodecError.malformed("Přijímací buffer přesáhl 64 KiB.") }
+        guard buffer.count <= 65536 else { buffer.removeAll(); throw CodecError.malformed("Receive buffer exceeded 64 KiB.") }
         while let marker = buffer.firstIndex(of: 35) {
             if marker > 0 { buffer.removeFirst(marker) }
             guard buffer.count >= 13 else { break }
@@ -58,7 +58,7 @@ final class PacketStreamDecoder {
             let total = 13 + length + 4; guard buffer.count >= total else { break }
             let raw = buffer.prefix(total), expected = try AlphaHex.decode(Substring(String(decoding: raw.suffix(4), as: UTF8.self)))
             let actual = raw.dropFirst().dropLast(4).reduce(0) { ($0 + Int($1)) & 0xffff }
-            guard actual == expected else { buffer.removeFirst(); throw CodecError.malformed("Nesouhlasí checksum paketu.") }
+            guard actual == expected else { buffer.removeFirst(); throw CodecError.malformed("Packet checksum mismatch.") }
             let id = try AlphaHex.decode(text[text.index(text.startIndex, offsetBy: 5)..<text.index(text.startIndex, offsetBy: 9)])
             packets.append(.init(type: chars[1], receiver: chars[2], sender: chars[3], id: UInt16(id), payload: Data(raw.dropFirst(13).dropLast(4))))
             buffer.removeFirst(total)
@@ -74,14 +74,14 @@ enum CMCodec {
         return Data(("*a" + AlphaHex.encode(payload.count, digits: 2) + AlphaHex.encode(bytes)).utf8)
     }
     static func decodeAll(_ data: Data) throws -> [CMMessage] {
-        guard let text = String(data: data, encoding: .ascii) else { throw CodecError.malformed("CM paket není ASCII.") }
+        guard let text = String(data: data, encoding: .ascii) else { throw CodecError.malformed("CM packet is not ASCII.") }
         var out: [CMMessage] = []; var p = text.startIndex
         while let r = text.range(of: "*a", range: p..<text.endIndex) {
             let lenStart = r.upperBound
-            guard let lenEnd = text.index(lenStart, offsetBy: 2, limitedBy: text.endIndex) else { throw CodecError.malformed("Neúplná délka CM zprávy.") }
+            guard let lenEnd = text.index(lenStart, offsetBy: 2, limitedBy: text.endIndex) else { throw CodecError.malformed("Incomplete CM message length.") }
             let n = try AlphaHex.decode(text[lenStart..<lenEnd])
-            guard let end = text.index(lenEnd, offsetBy: 10 + n * 2, limitedBy: text.endIndex) else { throw CodecError.malformed("Neúplná CM zpráva.") }
-            let raw = try AlphaHex.data(text[lenEnd..<end]); guard raw.count == n + 5 else { throw CodecError.malformed("Chybná délka CM zprávy.") }
+            guard let end = text.index(lenEnd, offsetBy: 10 + n * 2, limitedBy: text.endIndex) else { throw CodecError.malformed("Incomplete CM message.") }
+            let raw = try AlphaHex.data(text[lenEnd..<end]); guard raw.count == n + 5 else { throw CodecError.malformed("Invalid CM message length.") }
             // Normalize the Data slice to zero-based indexes. RC payloads are
             // indexed from byte zero by the command decoder.
             out.append(.init(targetPID: raw[0], sourcePID: raw[1], flags: raw[2], messageID: UInt16(raw[3]) | UInt16(raw[4]) << 8, payload: Data(raw.dropFirst(5))))

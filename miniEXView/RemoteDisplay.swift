@@ -9,14 +9,14 @@ struct RCCommand {
 enum RCStream {
     static func decode(_ input: Data) throws -> (UInt16, [RCCommand]) {
         let bytes = [UInt8](input)
-        guard bytes.count >= 2 else { throw CodecError.malformed("RC stream nemá pořadové číslo.") }
+        guard bytes.count >= 2 else { throw CodecError.malformed("RC stream has no sequence number.") }
         let sequence = UInt16(bytes[0]) | UInt16(bytes[1]) << 8
         var commands: [RCCommand] = []
         var offset = 2
         while offset < bytes.count {
             let length = Int(bytes[offset])
             guard length >= 1, offset + length < bytes.count else {
-                throw CodecError.malformed("RC příkaz na pozici \(offset) je neúplný.")
+                throw CodecError.malformed("RC command at offset \(offset) is incomplete.")
             }
             let id = bytes[offset + 1]
             let payload = Array(bytes[(offset + 2)..<(offset + length + 1)])
@@ -31,9 +31,9 @@ enum RCStream {
             default: required = nil
             }
             if let required, payload.count != required {
-                throw CodecError.malformed("RC příkaz 0x\(String(id, radix: 16)) má \(payload.count) bajtů, očekává \(required).")
+                throw CodecError.malformed("RC command 0x\(String(id, radix: 16)) has \(payload.count) bytes, expected \(required).")
             }
-            if id == 0x48 && payload.count < 3 { throw CodecError.malformed("RC text nemá souřadnice a font.") }
+            if id == 0x48 && payload.count < 3 { throw CodecError.malformed("RC text requires coordinates and font.") }
             commands.append(.init(id: id, payload: payload))
             offset += length + 1
         }
@@ -70,7 +70,7 @@ struct RCResources: Decodable {
     let bargraphs: [RCBitmap]
     static func load(language: String = "English") throws -> RCResources {
         guard let url = Bundle.main.url(forResource: "EnglishRC", withExtension: "json") else {
-            throw CodecError.malformed("Chybí anglické RC prostředky.")
+            throw CodecError.malformed("English RC resources are missing.")
         }
         var resources = try JSONDecoder().decode(RCResources.self, from: Data(contentsOf: url))
         if language != "English" {

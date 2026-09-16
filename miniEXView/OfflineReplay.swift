@@ -16,7 +16,7 @@ struct OfflineRCFrame {
 enum OfflineReplay {
     static func load(_ recording: OfflineRecording, bundle: Bundle = .main) throws -> [OfflineRCFrame] {
         guard let url = bundle.url(forResource: recording.rawValue, withExtension: "txt") else {
-            throw CodecError.malformed("Chybí záznam \(recording.rawValue).txt v aplikaci.")
+            throw CodecError.malformed("Missing recording \(recording.rawValue).txt in the app.")
         }
         let contents = try String(contentsOf: url, encoding: .utf8)
         let decoder = PacketStreamDecoder()
@@ -34,10 +34,10 @@ enum OfflineReplay {
                     }
                 }
             } catch {
-                throw CodecError.malformed("Záznam \(recording.rawValue), řádek \(lineNumber + 1): \(error.localizedDescription)")
+                throw CodecError.malformed("Recording \(recording.rawValue), line \(lineNumber + 1): \(error.localizedDescription)")
             }
         }
-        guard !frames.isEmpty else { throw CodecError.malformed("Záznam neobsahuje žádné RC rámce.") }
+        guard !frames.isEmpty else { throw CodecError.malformed("Recording contains no RC frames.") }
         return frames
     }
 }

@@ -51,19 +51,19 @@ struct MeasuredRecord: Identifiable, Codable {
     init() {
         do { display = RCDisplay(resources: try RCResources.load(language: rcLanguage)); displayImage = display?.image() }
         catch { appendDiagnostic("RC RESOURCES ERROR: \(error)") }
-        appendDiagnostic("Aplikace spuštěna, verze \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] ?? "?") (\(Bundle.main.infoDictionary?["CFBundleVersion"] ?? "?"))")
+        appendDiagnostic("App launched, version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] ?? "?") (\(Bundle.main.infoDictionary?["CFBundleVersion"] ?? "?"))")
         transport.onRawData = { [log] data in log.rawTCP(data) }
         transport.onState = { [weak self] value in Task { @MainActor in
             guard let self else { return }
             if self.isOfflineDemo { return }
-            self.connectionState = value == "Připojeno" ? "Connected" : "Disconnected: \(value)"; self.isConnected = value == "Připojeno"
+            self.connectionState = value; self.isConnected = value == "Connected"
             self.appendDiagnostic("SOCKET: \(value)")
-            if value != "Připojeno" {
+            if value != "Connected" {
                 self.remoteActive = false
                 self.display?.clear(); self.displayImage = self.display?.image()
                 self.downloader.cancel()
                 self.status = self.connectionState
-                if self.deviceKeyHeld { self.deviceKeyHeld = false; self.appendDiagnostic("RC KEY: spojení skončilo během stisku") }
+                if self.deviceKeyHeld { self.deviceKeyHeld = false; self.appendDiagnostic("RC KEY: connection ended while button held") }
             }
         } }
         transport.onWrite = { [weak self] count, error in Task { @MainActor in
@@ -73,7 +73,7 @@ struct MeasuredRecord: Identifiable, Codable {
                 self.bytesSent += count
                 self.successfulWrites += 1
                 if self.successfulWrites == 1 || self.successfulWrites.isMultiple(of: 20) {
-                    self.appendDiagnostic("TX COMPLETE: \(self.successfulWrites) zápisů, \(self.bytesSent) B předáno TCP stacku")
+                    self.appendDiagnostic("TX COMPLETE: \(self.successfulWrites) writes, \(self.bytesSent) B handed to TCP stack")
                 }
             }
         } }
@@ -89,7 +89,7 @@ struct MeasuredRecord: Identifiable, Codable {
         cancelReplay()
         isOfflineDemo = false
         let selectedHost = bridge ? bridgeHost : host; let selectedPort = UInt16(clamping: bridge ? bridgePort : port)
-        guard !selectedHost.isEmpty, selectedPort > 0 else { appendDiagnostic("CONNECT ERROR: neplatný host nebo port"); return }
+        guard !selectedHost.isEmpty, selectedPort > 0 else { appendDiagnostic("CONNECT ERROR: invalid host or port"); return }
         releaseDeviceKey()
         decoder.reset()
         remoteActive = false
@@ -98,13 +98,13 @@ struct MeasuredRecord: Identifiable, Codable {
         do { display = RCDisplay(resources: try RCResources.load(language: rcLanguage)); displayImage = display?.image() }
         catch { appendDiagnostic("RC RESOURCES ERROR: \(error.localizedDescription)") }
         connectedEndpoint = "\(selectedHost):\(selectedPort)"
-        appendDiagnostic("CONNECT: \(selectedHost):\(selectedPort) režim=\(bridge ? "bridge" : "Wi-Fi")")
+        appendDiagnostic("CONNECT: \(selectedHost):\(selectedPort) mode=\(bridge ? "bridge" : "Wi-Fi")")
         transport.connect(host: selectedHost, port: selectedPort)
     }
-    func disconnect() { releaseDeviceKey(); appendDiagnostic("DISCONNECT: požadavek uživatele"); transport.disconnect() }
+    func disconnect() { releaseDeviceKey(); appendDiagnostic("DISCONNECT: user request"); transport.disconnect() }
     var activeEndpoint: String { connectedEndpoint }
     func sendCM(_ id: UInt16, payload: Data = Data(), target: UInt8, source: UInt8 = 5, flags: UInt8 = 0x20) {
-        guard isConnected else { appendDiagnostic("TX SKIPPED: socket není připraven, CM=0x\(String(format: "%04X", id))"); return }
+        guard isConnected else { appendDiagnostic("TX SKIPPED: socket is not ready, CM=0x\(String(format: "%04X", id))"); return }
         let cm = CMCodec.encode(target: target, source: source, flags: flags, id: id, payload: payload)
         let packetID = nextPacketID
         nextPacketID &+= 1
@@ -126,7 +126,7 @@ struct MeasuredRecord: Identifiable, Codable {
         sendCM(WireMessage.streamOn, payload: Data([0, 0, 0xf4, 0x01]), target: 1, flags: 0)
         sendCM(WireMessage.redraw, target: 2)
         remoteActive = true
-        appendDiagnostic("RC ON: aktivace vyžádána")
+        appendDiagnostic("RC ON: activation requested")
     }
     func stopRemote() {
         guard isConnected else { return }
@@ -134,7 +134,7 @@ struct MeasuredRecord: Identifiable, Codable {
         sendCM(WireMessage.streamOff, target: 1, flags: 0)
         remoteActive = false
         display?.clear(); displayImage = display?.image()
-        appendDiagnostic("RC OFF: deaktivace vyžádána")
+        appendDiagnostic("RC OFF: deactivation requested")
     }
     func toggleRemote() { remoteActive ? stopRemote() : startRemote() }
     func pressDeviceKey() {
@@ -229,7 +229,7 @@ struct MeasuredRecord: Identifiable, Codable {
             replayProgress = 0
             replayPlaying = true
             status = "Playing \(recording.title)"
-            appendDiagnostic("OFFLINE START: \(recording.rawValue), \(frames.count) RC rámců")
+            appendDiagnostic("OFFLINE START: \(recording.rawValue), \(frames.count) RC frames")
             replayTask = Task { @MainActor [weak self] in
                 guard let self else { return }
                 for (index, frame) in frames.enumerated() {
@@ -298,7 +298,7 @@ struct MeasuredRecord: Identifiable, Codable {
                             receivedRCFrames += 1
                             log.write("RC FRAME END seq=\(sequenceNumber)")
                             if receivedRCFrames == 1 || receivedRCFrames.isMultiple(of: 20) {
-                                appendDiagnostic("RX RC: \(receivedRCFrames) rámců, seq=\(sequenceNumber), commands=\(commands.count), ACK")
+                                appendDiagnostic("RX RC: \(receivedRCFrames) frames, seq=\(sequenceNumber), commands=\(commands.count), ACK")
                             }
                         } catch { appendDiagnostic("RC DECODE ERROR: \(error.localizedDescription)") }
                     }
