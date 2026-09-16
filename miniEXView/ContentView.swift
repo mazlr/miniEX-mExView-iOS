@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @EnvironmentObject var model: AppModel; @State private var showConnection = false; @State private var shareURL: URL?
+    @EnvironmentObject var model: AppModel; @State private var showConnection = false; @State private var showAbout = false; @State private var shareURL: URL?
     var body: some View {
         NavigationView { TabView {
             RemoteView().tabItem { Label("Ovládání", systemImage: "display") }
@@ -9,8 +9,8 @@ struct ContentView: View {
             DataView(shareURL: $shareURL).tabItem { Label("Data", systemImage: "tablecells") }
             DiagnosticsView().tabItem { Label("Diagnostika", systemImage: "waveform.path.ecg") }
         }.navigationTitle("miniEX mExView").toolbar { ToolbarItem(placement: .navigationBarTrailing) { Menu {
-            Button("Připojení") { showConnection = true }; Button("Offline demo") { model.demo() }; Divider(); Button(model.isConnected ? "Odpojit" : "Připojit přes Wi‑Fi") { model.isConnected ? model.disconnect() : model.connect() }
-        } label: { Image(systemName: "ellipsis.circle") } } }.sheet(isPresented: $showConnection) { ConnectionView() }.sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) { if let shareURL { ShareView(url: shareURL) } } }
+            Button("Připojení") { showConnection = true }; Button("O aplikaci") { showAbout = true }; Button("Offline demo") { model.demo() }; Divider(); Button(model.isConnected ? "Odpojit" : "Připojit přes Wi‑Fi") { model.isConnected ? model.disconnect() : model.connect() }
+        } label: { Image(systemName: "ellipsis.circle") } } }.sheet(isPresented: $showConnection) { ConnectionView() }.sheet(isPresented: $showAbout) { AboutView() }.sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) { if let shareURL { ShareView(url: shareURL) } } }
     }
 }
 
@@ -18,8 +18,11 @@ struct RemoteView: View {
     @EnvironmentObject var model: AppModel; @State private var zoom = 1.0; @State private var touchingDeviceKey = false
     var body: some View { VStack(spacing: 14) {
         Text(model.connectionState).font(.caption).foregroundStyle(model.isConnected ? .green : .secondary)
-        Canvas { context, size in let sx = size.width/160, sy = size.height/128; for y in 0..<128 { for x in 0..<160 { context.fill(Path(CGRect(x:CGFloat(x)*sx,y:CGFloat(y)*sy,width:sx+0.5,height:sy+0.5)),with:.color(model.pixels[y*160+x])) } } }
-            .aspectRatio(160/128,contentMode:.fit).background(.black).clipShape(RoundedRectangle(cornerRadius:8)).overlay(RoundedRectangle(cornerRadius:8).stroke(.gray,lineWidth:5)).scaleEffect(zoom).gesture(MagnificationGesture().onChanged { zoom = min(max($0,1),4) })
+        Group {
+            if let image = model.displayImage { Image(uiImage: image).resizable().interpolation(.none) }
+            else { Canvas { context, size in let sx = size.width/160, sy = size.height/128; for y in 0..<128 { for x in 0..<160 { context.fill(Path(CGRect(x:CGFloat(x)*sx,y:CGFloat(y)*sy,width:sx+0.5,height:sy+0.5)),with:.color(model.pixels[y*160+x])) } } } }
+        }.aspectRatio(160.0/128.0,contentMode:.fit).background(.black).clipShape(RoundedRectangle(cornerRadius:8)).overlay(RoundedRectangle(cornerRadius:8).stroke(.gray,lineWidth:5)).scaleEffect(zoom).gesture(MagnificationGesture().onChanged { zoom = min(max($0,1),4) })
+        Button(model.remoteActive ? "Vypnout remote control" : "Zapnout remote control") { model.toggleRemote() }.buttonStyle(.borderedProminent).disabled(!model.isConnected)
         Label("Tlačítko přístroje", systemImage: "power")
             .frame(maxWidth: .infinity).padding()
             .background(touchingDeviceKey ? Color.orange : Color.blue)
@@ -67,14 +70,25 @@ struct ConnectionView: View {
 
 struct ShareView: UIViewControllerRepresentable { let url:URL; func makeUIViewController(context:Context)->UIActivityViewController { UIActivityViewController(activityItems:[url],applicationActivities:nil) }; func updateUIViewController(_ uiViewController:UIActivityViewController,context:Context){} }
 
+struct AboutView: View {
+    @Environment(\.dismiss) private var dismiss
+    private var version: String { "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] ?? "?") (\(Bundle.main.infoDictionary?["CFBundleVersion"] ?? "?"))" }
+    var body: some View { NavigationView { Form {
+        Section { HStack { Image("AppIconPreview").resizable().frame(width: 64, height: 64).clipShape(RoundedRectangle(cornerRadius: 12)); VStack(alignment: .leading) { Text("miniEX mExView").font(.headline); Text("Verze \(version)").foregroundStyle(.secondary) } } }
+        Section("Připojení") { Text("Wi‑Fi / TCP, iOS 15+"); Text("Vzdálený displej používá anglické bitmapy miniEX.") }
+    }.navigationTitle("O aplikaci").toolbar { Button("Hotovo") { dismiss() } } } }
+}
+
 struct DiagnosticsView: View {
     @EnvironmentObject var model: AppModel
+    @State private var shareLog = false
     var body: some View { VStack(spacing: 0) {
         Form {
             Section("Socket") { HStack { Text("Stav"); Spacer(); Text(model.connectionState).foregroundColor(model.isConnected ? .green : .secondary) }; HStack { Text("Aktivní cíl"); Spacer(); Text(model.activeEndpoint).font(.caption.monospaced()) } }
             Section("Počítadla") { HStack { Text("Předáno TCP"); Spacer(); Text("\(model.bytesSent) B") }; HStack { Text("Zařazeno"); Spacer(); Text("\(model.bytesQueued) B") }; HStack { Text("Přijato"); Spacer(); Text("\(model.bytesReceived) B") }; HStack { Text("Pakety / CM"); Spacer(); Text("\(model.packetCount) / \(model.cmMessageCount)") } }
+            Section("Soubor protokolu") { Text(model.diagnosticFileURL.lastPathComponent).font(.caption.monospaced()); Button("Sdílet úplný log") { shareLog = true }; Text("Soubory → Na mém iPhonu → miniEX mExView → miniEX-logs").font(.caption).foregroundStyle(.secondary) }
             Section { HStack { Button("Kopírovat log") { UIPasteboard.general.string = model.diagnosticText }; Spacer(); Button("Vymazat", role: .destructive) { model.clearDiagnostics() } } }
-        }.frame(height: 310)
+        }.frame(height: 420)
         ScrollView { Text(model.diagnosticText.isEmpty ? "Zatím nejsou žádné události." : model.diagnosticText).font(.system(size: 11, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading).padding() }.background(Color.black).foregroundColor(.green)
-    } }
+    }.sheet(isPresented: $shareLog) { ShareView(url: model.diagnosticFileURL) } }
 }

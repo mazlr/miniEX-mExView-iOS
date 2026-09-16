@@ -1,15 +1,25 @@
 # miniEX mExView for iPhone
 
-Aktuální vydání: **0.9.3 (build 4)**.
+Aktuální vydání: **0.9.4 (build 5)**.
 
 ### Diagnostika připojení
 
-Po ruční instalaci otevřete záložku **Diagnostika**, vymažte log a připojte se
-znovu. Log ukáže přesný odeslaný ASCII/HEX paket i výsledek předání TCP stacku.
+Po ruční instalaci otevřete záložku **Diagnostika** a připojte se znovu.
+Log ukáže přesný odeslaný ASCII/HEX paket i výsledek předání TCP stacku.
 „Připojeno“ znamená otevřený socket; teprve řádek `RX TCP` potvrzuje odpověď
 přístroje. Pokud přístroj spojení zavře, objeví se
 `Odpojeno: vzdálený přístroj uzavřel TCP (EOF)`. Chyby sítě a místní odpojení
-mají vlastní hlášení. Tlačítkem **Kopírovat log** lze odeslat celý časový sled.
+mají vlastní hlášení. Každý přijatý TCP blok se ukládá okamžitě do souboru,
+ještě před dekódováním. Přes **Diagnostika → Sdílet úplný log** odešlete soubor
+například do e-mailu nebo aplikace Soubory. I po pádu aplikace ho najdete v
+**Soubory → Na mém iPhonu → miniEX mExView → miniEX-logs**. Vymazání zobrazené
+diagnostiky soubor nesmaže. Po každém novém spuštění vznikne nový soubor.
+
+Remote Control zapněte tlačítkem na záložce **Ovládání** až po otevření socketu;
+stejné tlačítko ho zase vypne. Díky tomu lze odděleně sledovat otevření TCP,
+odeslání příkazu RC, ACK a přijímání obrazových rámců. Obrazovka používá
+anglické bitmapy a fonty původní Android aplikace. O aplikaci a aktuální verzi
+najdete v nabídce tří teček.
 
 Nativní přepis Android aplikace pro iOS 15+ ve SwiftUI. USB vrstva je záměrně
 vynechána. Aplikace zachovává TCP/Wi-Fi komunikaci, internet bridge, packetový a
@@ -32,9 +42,11 @@ podporovaný síťový adaptér bez změn UI a protokolu.
 1. Nahrajte obsah této složky do kořene GitHub repozitáře.
 2. Otevřete **Actions → Build iOS → Run workflow** (workflow se nespouští automaticky).
 3. Zvolte `Release` nebo `Debug` a spusťte workflow.
-4. Po dokončení stáhněte artefakt `miniEXView-v0.9.3-build4-iPhone-unsigned-Release`.
+4. Po dokončení stáhněte artefakt `miniEXView-v0.9.4-build5-iPhone-unsigned-Release`.
 
-Workflow se spouští pouze ručně. Používá GitHub runner `macos-15`, Xcode 16.4 a
+Workflow se spouští pouze ručně. Nejdříve ověří šest přiložených záznamů a
+provede testy dekodéru na iOS simulátoru, poté sestaví IPA pro fyzický telefon.
+Používá GitHub runner `macos-15`, Xcode 16.4 a
 nevyžaduje žádné secrets. Výsledkem je nepodepsané IPA zkompilované pro fyzický
 iPhone (arm64), nikoliv pro simulátor.
 

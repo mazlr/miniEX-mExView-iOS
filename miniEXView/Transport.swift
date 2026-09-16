@@ -3,6 +3,7 @@ import Network
 
 protocol MiniEXTransport: AnyObject {
     var onData: ((Data) -> Void)? { get set }
+    var onRawData: ((Data) -> Void)? { get set }
     var onState: ((String) -> Void)? { get set }
     var onWrite: ((Int, String?) -> Void)? { get set }
     func connect(host: String, port: UInt16)
@@ -14,6 +15,7 @@ protocol MiniEXTransport: AnyObject {
 /// report a cancelled socket as the state of a newly opened connection.
 final class TCPTransport: MiniEXTransport {
     var onData: ((Data) -> Void)?
+    var onRawData: ((Data) -> Void)?
     var onState: ((String) -> Void)?
     var onWrite: ((Int, String?) -> Void)?
 
@@ -81,7 +83,7 @@ final class TCPTransport: MiniEXTransport {
     private func receive(from current: NWConnection) {
         current.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self, weak current] data, _, complete, error in
             guard let self, let current, self.connection === current else { return }
-            if let data, !data.isEmpty { self.onData?(data) }
+            if let data, !data.isEmpty { self.onRawData?(data); self.onData?(data) }
             if let error {
                 self.close(current, reason: "Chyba čtení: \(error.localizedDescription)")
             } else if complete {

@@ -11,7 +11,7 @@ struct MeasuredRecord: Identifiable, Codable {
     @AppStorage("bridgeHost") var bridgeHost = "178.17.15.192"; @AppStorage("bridgePort") var bridgePort = 2001
     @AppStorage("deviceID") var deviceID = ""; @AppStorage("rcLanguage") var rcLanguage = "English"
     @Published var connectionState = "Odpojeno"; @Published var status = "Připraveno"; @Published var isConnected = false
-    @Published var pixels = Array(repeating: Color.black, count: 160 * 128); @Published var records: [MeasuredRecord] = []
+    @Published var pixels = Array(repeating: Color.black, count: 160 * 128); @Published var displayImage: UIImage?; @Published var remoteActive = false; @Published var records: [MeasuredRecord] = []
     @Published var parameters = DeviceParameters(); @Published var firmware = "—"; @Published var serial = "—"
     @Published private(set) var diagnosticLines: [String] = []
     @Published private(set) var bytesSent = 0
@@ -25,14 +25,20 @@ struct MeasuredRecord: Identifiable, Codable {
     private var deviceKeyHeld = false
     private var connectedEndpoint = "—"
     private let transport: MiniEXTransport = TCPTransport(); private let decoder = PacketStreamDecoder()
+    private let log = DiagnosticLog()
+    private var display: RCDisplay?
+    var diagnosticFileURL: URL { log.url }
     init() {
-        appendDiagnostic("Aplikace spuštěna, verze 0.9.3 (4)")
+        do { display = RCDisplay(resources: try RCResources.load()); displayImage = display?.image() }
+        catch { appendDiagnostic("RC RESOURCES ERROR: \(error)") }
+        appendDiagnostic("Aplikace spuštěna, verze \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] ?? "?") (\(Bundle.main.infoDictionary?["CFBundleVersion"] ?? "?"))")
+        transport.onRawData = { [log] data in log.rawTCP(data) }
         transport.onState = { [weak self] value in Task { @MainActor in
             guard let self else { return }
             self.connectionState = value; self.isConnected = value == "Připojeno"
             self.appendDiagnostic("SOCKET: \(value)")
-            if value == "Připojeno" { self.startRemote() }
-            else {
+            if value != "Připojeno" {
+                self.remoteActive = false
                 self.status = value
                 if self.deviceKeyHeld { self.deviceKeyHeld = false; self.appendDiagnostic("RC KEY: spojení skončilo během stisku") }
             }
@@ -76,10 +82,21 @@ struct MeasuredRecord: Identifiable, Codable {
         transport.send(packet)
     }
     func startRemote() {
+        guard isConnected else { return }
         // Android MiniExProtocol.remoteOn(): retries=0, timeout=500 ms, little endian.
         sendCM(WireMessage.streamOn, payload: Data([0, 0, 0xf4, 0x01]), target: 1, flags: 0)
         sendCM(WireMessage.redraw, target: 2)
+        remoteActive = true
+        appendDiagnostic("RC ON: aktivace vyžádána")
     }
+    func stopRemote() {
+        guard isConnected else { return }
+        releaseDeviceKey()
+        sendCM(WireMessage.streamOff, target: 1, flags: 0)
+        remoteActive = false
+        appendDiagnostic("RC OFF: deaktivace vyžádána")
+    }
+    func toggleRemote() { remoteActive ? stopRemote() : startRemote() }
     func pressDeviceKey() {
         guard isConnected, !deviceKeyHeld else { return }
         deviceKeyHeld = true
@@ -125,7 +142,7 @@ struct MeasuredRecord: Identifiable, Codable {
             let y = pixelIndex / 160
             demoPixels[pixelIndex] = (x / 10 + y / 8).isMultiple(of: 2) ? dark : light
         }
-        pixels = demoPixels
+        pixels = demoPixels; displayImage = nil
         var demoRecords: [MeasuredRecord] = []
         let now = Date()
         for itemIndex in 0..<24 {
@@ -166,8 +183,16 @@ struct MeasuredRecord: Identifiable, Codable {
                     appendDiagnostic("RX CM: id=0x\(String(format: "%04X", message.messageID)) source=\(message.sourcePID) flags=0x\(String(format: "%02X", message.flags)) data=\(message.payload.count) B")
                     if message.targetPID == 5, message.sourcePID == 1, message.messageID == WireMessage.stream, message.payload.count >= 2 {
                         let sequence = Data(message.payload.prefix(2))
-                        appendDiagnostic("RX RC: seq=\(UInt16(sequence[0]) | UInt16(sequence[1]) << 8), ACK")
                         sendCM(WireMessage.stream, payload: sequence, target: 1)
+                        do {
+                            let (_, commands) = try RCStream.decode(message.payload)
+                            display?.apply(commands)
+                            displayImage = display?.image()
+                            appendDiagnostic("RX RC: seq=\(UInt16(sequence[0]) | UInt16(sequence[1]) << 8), commands=\(commands.count), ACK")
+                        } catch { appendDiagnostic("RC DECODE ERROR: \(error.localizedDescription)") }
+                    }
+                    if message.targetPID == 5, message.sourcePID == 1, message.messageID == WireMessage.streamOff, message.flags & 0x40 != 0 {
+                        appendDiagnostic("RC OFF ANSWER: \(message.flags & 0x80 == 0 ? "OK" : "ERROR")")
                     }
                     handle(message)
                 }
@@ -175,6 +200,7 @@ struct MeasuredRecord: Identifiable, Codable {
         } catch { status = error.localizedDescription; appendDiagnostic("DECODE ERROR: \(error.localizedDescription)") }
     }
     private func appendDiagnostic(_ text: String) {
+        log.write(text)
         let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss.SSS"
         diagnosticLines.append("[\(formatter.string(from: Date()))] \(text)")
         if diagnosticLines.count > 500 { diagnosticLines.removeFirst(diagnosticLines.count - 500) }
@@ -200,11 +226,10 @@ struct MeasuredRecord: Identifiable, Codable {
                 parameters = DeviceParameters(wireValues: values, bounds: parameterBounds)
                 status = "Nastavení načteno."
             } catch { status = error.localizedDescription }
-        case WireMessage.stream: renderStream(m.payload)
+        case WireMessage.stream, WireMessage.streamOff: break
         default: status = "Přijata zpráva 0x\(String(m.messageID, radix: 16))"
         }
     }
-    private func renderStream(_ data: Data) { guard !data.isEmpty else { return }; for (i,b) in data.enumerated() { let p = (i * 31) % pixels.count; pixels[p] = b & 1 == 0 ? .cyan : .red }; objectWillChange.send() }
 }
 
 struct DeviceParameters {

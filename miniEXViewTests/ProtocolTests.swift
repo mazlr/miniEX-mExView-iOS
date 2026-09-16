@@ -2,6 +2,35 @@ import XCTest
 @testable import miniEXView
 
 final class ProtocolTests: XCTestCase {
+    func testCapturedLogsAndRemoteRenderer() throws {
+        let resource = try RCResources.load()
+        XCTAssertEqual(resource.bitmaps.count, 43)
+        XCTAssertEqual(resource.fonts.count, 3)
+        XCTAssertEqual(resource.bargraphs.count, 26)
+        let display = RCDisplay(resources: resource)
+        var totalRC = 0
+        for file in ["RC from miniEX long", "RC from miniEX short", "RC to miniEX long", "RC to miniEX short", "SetParam from miniEX", "SetParam to miniEX"] {
+            let folder = try XCTUnwrap(Bundle(for: ProtocolTests.self).url(forResource: file, withExtension: "txt", subdirectory: "Fixtures"))
+            let text = try String(contentsOf: folder, encoding: .utf8)
+            var packets = 0
+            for line in text.split(whereSeparator: \.isNewline) {
+                let bytes = Data(String(line).trimmingCharacters(in: CharacterSet(charactersIn: "~")).utf8)
+                let decoded = try PacketStreamDecoder().append(bytes)
+                XCTAssertEqual(decoded.count, 1, "\(file): \(packets)")
+                for packet in decoded {
+                    packets += 1
+                    for message in try CMCodec.decodeAll(packet.payload) where message.targetPID == 5 && message.sourcePID == 1 && message.messageID == WireMessage.stream {
+                        let (_, commands) = try RCStream.decode(message.payload)
+                        display.apply(commands)
+                        totalRC += 1
+                    }
+                }
+            }
+            XCTAssertGreaterThan(packets, 0)
+        }
+        XCTAssertEqual(totalRC, 760)
+        XCTAssertNotNil(display.image())
+    }
     func testAlphaHex() throws { XCTAssertEqual(AlphaHex.encode(Data([0,0x1f,0xa5,0xff])),"AA BP KF PP".replacingOccurrences(of:" ",with:"")); XCTAssertEqual(try AlphaHex.decode("BEEF"[...]),0x1445) }
     func testPacketRoundTrip() throws { let built=PacketCodec.build(receiver:"a",sender:"b",id:0x1234,payload:Data("hello".utf8)); let decoded=try PacketStreamDecoder().append(built); XCTAssertEqual(decoded.first?.id,0x1234); XCTAssertEqual(decoded.first?.payload,Data("hello".utf8)) }
     func testCMRoundTrip() throws { let data=CMCodec.encode(target:5,source:3,id:0x0241,payload:Data([1,2])); let decoded=try CMCodec.decodeAll(data); XCTAssertEqual(decoded.first?.messageID,0x0241); XCTAssertEqual(decoded.first?.payload,Data([1,2])) }

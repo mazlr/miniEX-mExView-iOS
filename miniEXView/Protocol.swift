@@ -46,6 +46,7 @@ final class PacketStreamDecoder {
     func reset() { buffer.removeAll(keepingCapacity: true) }
     func append(_ bytes: Data) throws -> [MiniEXPacket] {
         buffer.append(bytes); var packets: [MiniEXPacket] = []
+        guard buffer.count <= 65536 else { buffer.removeAll(); throw CodecError.malformed("Přijímací buffer přesáhl 64 KiB.") }
         while let marker = buffer.firstIndex(of: 35) {
             if marker > 0 { buffer.removeFirst(marker) }
             guard buffer.count >= 13 else { break }
@@ -79,7 +80,9 @@ enum CMCodec {
             let n = try AlphaHex.decode(text[lenStart..<lenEnd])
             guard let end = text.index(lenEnd, offsetBy: 10 + n * 2, limitedBy: text.endIndex) else { throw CodecError.malformed("Neúplná CM zpráva.") }
             let raw = try AlphaHex.data(text[lenEnd..<end]); guard raw.count == n + 5 else { throw CodecError.malformed("Chybná délka CM zprávy.") }
-            out.append(.init(targetPID: raw[0], sourcePID: raw[1], flags: raw[2], messageID: UInt16(raw[3]) | UInt16(raw[4]) << 8, payload: raw.dropFirst(5)))
+            // Normalize the Data slice to zero-based indexes. RC payloads are
+            // indexed from byte zero by the command decoder.
+            out.append(.init(targetPID: raw[0], sourcePID: raw[1], flags: raw[2], messageID: UInt16(raw[3]) | UInt16(raw[4]) << 8, payload: Data(raw.dropFirst(5))))
             p = end
         }
         return out
