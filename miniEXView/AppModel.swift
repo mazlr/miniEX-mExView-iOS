@@ -10,7 +10,7 @@ struct MeasuredRecord: Identifiable, Codable {
     @AppStorage("host") var host = "192.168.0.99"; @AppStorage("port") var port = 2500
     @AppStorage("bridgeHost") var bridgeHost = "178.17.15.192"; @AppStorage("bridgePort") var bridgePort = 2001
     @AppStorage("deviceID") var deviceID = ""; @AppStorage("rcLanguage") var rcLanguage = "English"
-    @Published var connectionState = "Odpojeno"; @Published var status = "Připraveno"; @Published var isConnected = false
+    @Published var connectionState = "Disconnected"; @Published var status = "Ready"; @Published var isConnected = false
     @Published var pixels = Array(repeating: Color.black, count: 160 * 128); @Published var displayImage: UIImage?; @Published var remoteActive = false; @Published var records: [MeasuredRecord] = []
     @Published var parameters = DeviceParameters(); @Published var firmware = "—"; @Published var serial = "—"
     @Published private(set) var diagnosticLines: [String] = []
@@ -25,6 +25,18 @@ struct MeasuredRecord: Identifiable, Codable {
     @Published private(set) var replayTotal = 0
     @Published private(set) var parameterBounds = MiniEXParameterBounds.defaults
     private var firmwareVersion: MiniEXFirmwareVersion?
+    @Published private(set) var supportedLanguages = [0, 1]
+    @Published private(set) var supportedLanguageNames = ["Default (English)", "English"]
+    func languageName(_ compactID: Int) -> String {
+        supportedLanguageNames.indices.contains(compactID) ? supportedLanguageNames[compactID] : "Language \(compactID)"
+    }
+    private var originalParameters: MiniEXUserParameters?
+    private lazy var downloader: DataDownload = {
+        let value = DataDownload()
+        value.send = { [weak self] pid, id, payload in self?.sendCM(id, payload: payload, target: pid, source: 4, flags: 0) }
+        value.onUpdate = { [weak self] records, status in self?.records = records; self?.status = status }
+        return value
+    }()
     private var nextPacketID: UInt16 = 0
     private var deviceKeyHeld = false
     private var connectedEndpoint = "—"
@@ -37,18 +49,20 @@ struct MeasuredRecord: Identifiable, Codable {
     private var successfulWrites = 0
     var diagnosticFileURL: URL { log.url }
     init() {
-        do { display = RCDisplay(resources: try RCResources.load()); displayImage = display?.image() }
+        do { display = RCDisplay(resources: try RCResources.load(language: rcLanguage)); displayImage = display?.image() }
         catch { appendDiagnostic("RC RESOURCES ERROR: \(error)") }
         appendDiagnostic("Aplikace spuštěna, verze \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] ?? "?") (\(Bundle.main.infoDictionary?["CFBundleVersion"] ?? "?"))")
         transport.onRawData = { [log] data in log.rawTCP(data) }
         transport.onState = { [weak self] value in Task { @MainActor in
             guard let self else { return }
             if self.isOfflineDemo { return }
-            self.connectionState = value; self.isConnected = value == "Připojeno"
+            self.connectionState = value == "Připojeno" ? "Connected" : "Disconnected: \(value)"; self.isConnected = value == "Připojeno"
             self.appendDiagnostic("SOCKET: \(value)")
             if value != "Připojeno" {
                 self.remoteActive = false
-                self.status = value
+                self.display?.clear(); self.displayImage = self.display?.image()
+                self.downloader.cancel()
+                self.status = self.connectionState
                 if self.deviceKeyHeld { self.deviceKeyHeld = false; self.appendDiagnostic("RC KEY: spojení skončilo během stisku") }
             }
         } }
@@ -78,8 +92,10 @@ struct MeasuredRecord: Identifiable, Codable {
         guard !selectedHost.isEmpty, selectedPort > 0 else { appendDiagnostic("CONNECT ERROR: neplatný host nebo port"); return }
         releaseDeviceKey()
         decoder.reset()
+        remoteActive = false
+        originalParameters = nil; firmwareVersion = nil
         receivedRCFrames = 0
-        do { display = RCDisplay(resources: try RCResources.load()); displayImage = display?.image() }
+        do { display = RCDisplay(resources: try RCResources.load(language: rcLanguage)); displayImage = display?.image() }
         catch { appendDiagnostic("RC RESOURCES ERROR: \(error.localizedDescription)") }
         connectedEndpoint = "\(selectedHost):\(selectedPort)"
         appendDiagnostic("CONNECT: \(selectedHost):\(selectedPort) režim=\(bridge ? "bridge" : "Wi-Fi")")
@@ -117,6 +133,7 @@ struct MeasuredRecord: Identifiable, Codable {
         releaseDeviceKey()
         sendCM(WireMessage.streamOff, target: 1, flags: 0)
         remoteActive = false
+        display?.clear(); displayImage = display?.image()
         appendDiagnostic("RC OFF: deaktivace vyžádána")
     }
     func toggleRemote() { remoteActive ? stopRemote() : startRemote() }
@@ -131,35 +148,51 @@ struct MeasuredRecord: Identifiable, Codable {
         sendCM(WireMessage.keyRelease, target: 6)
     }
     func refreshSettings() {
-        let requests: [UInt16] = [
-            WireMessage.getFirmware,
-            WireMessage.getSerial,
-            WireMessage.getLanguages,
-            WireMessage.getBounds,
-            WireMessage.getParameters
-        ]
-        for request in requests {
-            let target: UInt8 = request == WireMessage.getBounds || request == WireMessage.getParameters ? 5 : 7
-            sendCM(request, target: target, source: 3, flags: 0)
-        }
-        status = "Načítám nastavení…"
+        guard isConnected else { return }
+        firmwareVersion = nil; originalParameters = nil
+        sendCM(WireMessage.getFirmware, target: 7, source: 3, flags: 0)
+        status = "Reading device settings…"
     }
     func saveSettings() {
+        guard let version = firmwareVersion, let original = originalParameters else {
+            status = "Read settings from the device before saving."; return
+        }
         do {
-            let wireValues = parameters.wireValues(bounds: parameterBounds)
-            let payload = try MiniEXUserParametersCodec.encodeValues(wireValues, dataTypeSize: firmwareVersion?.dataTypeSize ?? 3)
+            let wireValues = parameters.wireValues(bounds: parameterBounds, original: original)
+            for index in MiniEXUserParametersCodec.editableParameterIndices {
+                guard (parameterBounds.rawMinimum(index)...parameterBounds.rawMaximum(index)).contains(wireValues.raw[index]) else {
+                    throw CodecError.malformed("Parameter \(index) is outside device limits")
+                }
+            }
+            for (zero, alarm) in [(0, 1), (8, 9), (10, 11)] where zero == 0 || (zero == 8 ? version.availableModes > 1 : version.availableModes > 2) {
+                guard wireValues.raw[zero] < wireValues.raw[alarm] * 10 else { throw CodecError.malformed("Zero threshold must be below ten times the alarm threshold") }
+            }
+            guard supportedLanguages.contains(parameters.primaryLanguage), supportedLanguages.contains(parameters.secondaryLanguage) else {
+                throw CodecError.malformed("Unsupported device language")
+            }
+            let payload = try MiniEXUserParametersCodec.encodeValues(wireValues, dataTypeSize: version.dataTypeSize)
             sendCM(WireMessage.setParameters, payload: payload, target: 5, source: 3, flags: 0)
-            status = "Nastavení odesláno."
+            status = "Settings sent; waiting for device confirmation."
         } catch { status = error.localizedDescription }
     }
-    func restoreDefaults() { sendCM(WireMessage.defaults, target: 5, source: 3, flags: 0); parameters = DeviceParameters(); status = "Výchozí nastavení vyžádáno." }
-    func refreshData() { status = "Načítám data…"; sendCM(0x0B01, target: 7, source: 3, flags: 0); sendCM(0x0B06, target: 7, source: 3, flags: 0); sendCM(0x0501, target: 5, source: 3, flags: 0) }
-    func eraseData() { sendCM(0x0502, target: 5, source: 3, flags: 0); status = "Požadavek na smazání odeslán." }
+    func restoreDefaults() { sendCM(WireMessage.defaults, target: 5, source: 3, flags: 0); status = "Restore defaults requested." }
+    func refreshData() {
+        guard isConnected else { status = "Connect to download records."; return }
+        downloader.start(); status = "Reading device storage…"
+    }
+    func eraseData() { guard isConnected else { return }; downloader.erase(); status = "Erase requested." }
+    func changeRCLanguage() {
+        do {
+            display = RCDisplay(resources: try RCResources.load(language: rcLanguage))
+            displayImage = display?.image()
+            if isConnected && remoteActive { sendCM(WireMessage.redraw, target: 2) }
+        } catch { status = error.localizedDescription }
+    }
     func demo() {
         cancelReplay()
         if isConnected { disconnect() }
         isOfflineDemo = true
-        isConnected = false; connectionState = "Offline demo"; status = "Ukázkový obsah bez přístroje"
+        isConnected = false; connectionState = "Offline demo"; status = "Sample data without device"
         let dark = Color(red: 0.04, green: 0.10, blue: 0.13)
         let light = Color(red: 0.08, green: 0.25, blue: 0.30)
         var demoPixels = Array(repeating: dark, count: 160 * 128)
@@ -189,13 +222,13 @@ struct MeasuredRecord: Identifiable, Codable {
         demo()
         do {
             let frames = try OfflineReplay.load(recording)
-            let resources = try RCResources.load()
+            let resources = try RCResources.load(language: rcLanguage)
             display = RCDisplay(resources: resources)
             displayImage = display?.image()
             replayTotal = frames.count
             replayProgress = 0
             replayPlaying = true
-            status = "Přehrávám \(recording.title)"
+            status = "Playing \(recording.title)"
             appendDiagnostic("OFFLINE START: \(recording.rawValue), \(frames.count) RC rámců")
             replayTask = Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -210,17 +243,17 @@ struct MeasuredRecord: Identifiable, Codable {
                 }
                 if !Task.isCancelled {
                     self.replayPlaying = false
-                    self.status = "Záznam zpracován: \(self.replayProgress) / \(self.replayTotal) rámců"
+                    self.status = "Recording processed: \(self.replayProgress) / \(self.replayTotal) frames"
                     self.appendDiagnostic("OFFLINE END: \(self.replayProgress) / \(self.replayTotal)")
                 }
             }
         } catch {
-            status = "Chyba offline přehrávání: \(error.localizedDescription)"
+            status = "Offline replay failed: \(error.localizedDescription)"
             appendDiagnostic("OFFLINE ERROR: \(error.localizedDescription)")
         }
     }
     func cancelReplay() {
-        if replayPlaying { status = "Přehrávání zastaveno na rámci \(replayProgress)." }
+        if replayPlaying { status = "Replay stopped at frame \(replayProgress)." }
         replayTask?.cancel()
         replayTask = nil
         replayPlaying = false
@@ -236,7 +269,7 @@ struct MeasuredRecord: Identifiable, Codable {
         }
         try? lines.joined(separator: "\n").write(to: f, atomically: true, encoding: .utf8); return f
     }
-    func clearDiagnostics() { diagnosticLines.removeAll(); bytesSent = 0; bytesQueued = 0; bytesReceived = 0; packetCount = 0; cmMessageCount = 0; appendDiagnostic("Diagnostika vymazána") }
+    func clearDiagnostics() { diagnosticLines.removeAll(); bytesSent = 0; bytesQueued = 0; bytesReceived = 0; packetCount = 0; cmMessageCount = 0; appendDiagnostic("Diagnostics cleared") }
     var diagnosticText: String { diagnosticLines.joined(separator: "\n") }
     private func consume(_ data: Data) {
         do {
@@ -258,8 +291,10 @@ struct MeasuredRecord: Identifiable, Codable {
                         do {
                             let (_, commands) = try RCStream.decode(message.payload)
                             log.write("RC FRAME BEGIN seq=\(sequenceNumber) commands=\(commands.map { String(format: "%02X", $0.id) }.joined(separator: ","))", flush: true)
-                            display?.apply(commands)
-                            scheduleDisplayRefresh()
+                            if remoteActive {
+                                display?.apply(commands)
+                                scheduleDisplayRefresh()
+                            }
                             receivedRCFrames += 1
                             log.write("RC FRAME END seq=\(sequenceNumber)")
                             if receivedRCFrames == 1 || receivedRCFrames.isMultiple(of: 20) {
@@ -270,7 +305,8 @@ struct MeasuredRecord: Identifiable, Codable {
                     if message.targetPID == 5, message.sourcePID == 1, message.messageID == WireMessage.streamOff, message.flags & 0x40 != 0 {
                         appendDiagnostic("RC OFF ANSWER: \(message.flags & 0x80 == 0 ? "OK" : "ERROR")")
                     }
-                    handle(message)
+                    downloader.receive(message)
+                    if message.targetPID == 3 { handle(message) }
                 }
             }
         } catch { status = error.localizedDescription; appendDiagnostic("DECODE ERROR: \(error.localizedDescription)") }
@@ -282,7 +318,7 @@ struct MeasuredRecord: Identifiable, Codable {
             try? await Task.sleep(nanoseconds: 60_000_000)
             guard let self else { return }
             self.refreshScheduled = false
-            if !self.isOfflineDemo { self.displayImage = self.display?.image() }
+            if !self.isOfflineDemo && self.remoteActive { self.displayImage = self.display?.image() }
         }
     }
     private func appendDiagnostic(_ text: String) {
@@ -296,25 +332,46 @@ struct MeasuredRecord: Identifiable, Codable {
         switch m.messageID {
         case WireMessage.getFirmware:
             firmwareVersion = try? MiniEXFirmwareVersion.decode(m.payload)
-            if let version = firmwareVersion { firmware = "\(version.modelName), FW \(version.displayName)" }
+            if let version = firmwareVersion {
+                firmware = "\(version.modelName), FW \(version.displayName)"
+                sendCM(WireMessage.getSerial, target: 7, source: 3, flags: 0)
+                if version.firmwareCode >= 0x0111 { sendCM(WireMessage.getLanguages, target: 7, source: 3, flags: 0) }
+                else {
+                    supportedLanguages = version.firmwareCode >= 0x010c ? [0, 1, 2] : [0, 1]
+                    supportedLanguageNames = version.firmwareCode >= 0x010c ? ["Default (English)", "English", "Japanese"] : ["Default (English)", "English"]
+                    sendCM(WireMessage.getBounds, target: 5, source: 3, flags: 0)
+                }
+            }
         case WireMessage.getSerial where m.payload.count >= 4:
             var serialValue: UInt32 = 0
             for byteIndex in 0..<4 {
                 serialValue |= UInt32(m.payload[byteIndex]) << UInt32(byteIndex * 8)
             }
             serial = String(serialValue)
+        case WireMessage.getLanguages where m.payload.count == 2:
+            let mask = MiniEXUserParametersCodec.readU16(m.payload, at: 0)
+            let languages = ["English", "Japanese", "Arabic", "Traditional Chinese", "Simplified Chinese", "German", "Polish"]
+            let supported = (1...7).filter { mask & (1 << ($0 - 1)) != 0 }
+            supportedLanguages = Array(0...supported.count)
+            supportedLanguageNames = ["Default (English)"] + supported.map { languages[$0 - 1] }
+            sendCM(WireMessage.getBounds, target: 5, source: 3, flags: 0)
         case WireMessage.getBounds:
-            do { parameterBounds = try MiniEXUserParametersCodec.decodeBounds(m.payload); status = "Meze parametrů načteny." }
+            do { parameterBounds = try MiniEXUserParametersCodec.decodeBounds(m.payload); sendCM(WireMessage.getParameters, target: 5, source: 3, flags: 0); status = "Device limits read." }
             catch { status = error.localizedDescription }
         case WireMessage.getParameters:
             do {
                 let size = firmwareVersion?.dataTypeSize ?? 3
                 let values = try MiniEXUserParametersCodec.decodeValues(m.payload, dataTypeSize: size).normalized(to: parameterBounds)
+                originalParameters = values
                 parameters = DeviceParameters(wireValues: values, bounds: parameterBounds)
-                status = "Nastavení načteno."
+                status = "Device settings read."
             } catch { status = error.localizedDescription }
+        case WireMessage.setParameters:
+            if m.flags & 0x40 != 0 {
+                status = m.flags & 0x80 == 0 && m.payload.first == 0 ? "Settings saved on device." : "Device rejected settings."
+            }
         case WireMessage.stream, WireMessage.streamOff: break
-        default: status = "Přijata zpráva 0x\(String(m.messageID, radix: 16))"
+        default: status = "Received message 0x\(String(m.messageID, radix: 16))"
         }
     }
 }
@@ -340,8 +397,8 @@ struct DeviceParameters {
         secondaryLanguage = MiniEXUserParametersCodec.languageID(bitConfig: flags, primary: false)
         mode = wireValues.modeIndex
     }
-    func wireValues(bounds: MiniEXParameterBounds) -> MiniEXUserParameters {
-        var raw = MiniEXUserParameters.defaults.raw
+    func wireValues(bounds: MiniEXParameterBounds, original: MiniEXUserParameters = .defaults) -> MiniEXUserParameters {
+        var raw = original.raw
         let displays = [wideZero, wideAlarm, offTime, sampling, beep, alarm]
         for index in displays.indices { raw[index] = MiniEXUserParametersCodec.displayToRaw(parameter: index, display: displays[index], scale: bounds.rawScale(index)) }
         raw[7] = Int(irPower)
@@ -349,11 +406,11 @@ struct DeviceParameters {
         raw[9] = MiniEXUserParametersCodec.displayToRaw(parameter: 9, display: advancedAlarm, scale: bounds.rawScale(9))
         raw[10] = MiniEXUserParametersCodec.displayToRaw(parameter: 10, display: tatpZero, scale: bounds.rawScale(10))
         raw[11] = MiniEXUserParametersCodec.displayToRaw(parameter: 11, display: tatpAlarm, scale: bounds.rawScale(11))
-        var flags = wifi ? MiniEXUserParametersCodec.wifiMask : 0
+        var flags = wifi ? original.raw[6] | MiniEXUserParametersCodec.wifiMask : original.raw[6] & ~MiniEXUserParametersCodec.wifiMask
         flags = MiniEXUserParametersCodec.withLanguageID(bitConfig: flags, primary: true, languageID: primaryLanguage)
         flags = MiniEXUserParametersCodec.withLanguageID(bitConfig: flags, primary: false, languageID: secondaryLanguage)
         flags = (flags & ~MiniEXUserParametersCodec.modeMask) | ((mode << MiniEXUserParametersCodec.modeShift) & MiniEXUserParametersCodec.modeMask)
         raw[MiniEXUserParametersCodec.bitConfigIndex] = flags
-        return MiniEXUserParameters(raw: raw)
+        return MiniEXUserParameters(raw: raw, valid: original.valid)
     }
 }

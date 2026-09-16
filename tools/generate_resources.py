@@ -43,3 +43,17 @@ for h, hex_data in bar_pairs:
 target.mkdir(parents=True, exist_ok=True)
 (target / 'EnglishRC.json').write_text(json.dumps(dict(bitmaps=bitmaps, fonts=fonts, bargraphs=bargraphs), separators=(',',':')))
 print('Generated:',len(bitmaps),'bitmaps,',len(fonts),'fonts,',len(bargraphs),'bargraph columns')
+
+# Language overlays share all fonts and bargraphs with the English catalog.
+localized = (proto / 'LocalizedRcBitmapCatalogs.kt').read_text()
+overlays = {}
+for language, section in re.findall(r'private val (\w+)Catalog:.*?mapOf\((.*?)\n    \)\)', localized, re.S):
+    bitmaps_by_id = {}
+    for match in re.finditer(r'(\d+) to bitmap\((\d+),\s*(\d+),\s*(\d+),\s*RcBitmapType\.(\w+),\s*((?:"[0-9A-F]+"\s*\+?\s*)+)\)', section, re.S):
+        bitmap_id, width, height, fragments = map(int, match.group(1, 2, 3, 4))
+        data = bytes.fromhex(''.join(re.findall(r'"([0-9A-F]+)"', match.group(6))))
+        bitmaps_by_id[str(bitmap_id)] = dict(width=width, height=height, fragments=fragments, type=match.group(5), data=base64.b64encode(data).decode())
+    overlays[language] = bitmaps_by_id
+assert len(overlays) == 6 and all(overlays.values())
+(target / 'LocalizedRC.json').write_text(json.dumps(overlays, separators=(',', ':')))
+print('Generated overlays:', ', '.join(f'{key}={len(value)}' for key, value in overlays.items()))

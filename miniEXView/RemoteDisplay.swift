@@ -65,14 +65,26 @@ struct RCFont: Decodable {
 }
 
 struct RCResources: Decodable {
-    let bitmaps: [RCBitmap]
+    var bitmaps: [RCBitmap]
     let fonts: [RCFont]
     let bargraphs: [RCBitmap]
-    static func load() throws -> RCResources {
+    static func load(language: String = "English") throws -> RCResources {
         guard let url = Bundle.main.url(forResource: "EnglishRC", withExtension: "json") else {
             throw CodecError.malformed("Chybí anglické RC prostředky.")
         }
-        return try JSONDecoder().decode(RCResources.self, from: Data(contentsOf: url))
+        var resources = try JSONDecoder().decode(RCResources.self, from: Data(contentsOf: url))
+        if language != "English" {
+            guard let localized = Bundle.main.url(forResource: "LocalizedRC", withExtension: "json") else {
+                throw CodecError.malformed("Missing localized RC bitmaps")
+            }
+            let catalog = try JSONDecoder().decode([String: [String: RCBitmap]].self, from: Data(contentsOf: localized))
+            if let overrides = catalog[language] {
+                for (key, bitmap) in overrides {
+                    if let index = Int(key), resources.bitmaps.indices.contains(index) { resources.bitmaps[index] = bitmap }
+                }
+            }
+        }
+        return resources
     }
 }
 
@@ -92,6 +104,11 @@ final class RCDisplay {
     private let redGrayInactive: [Int] = [0x0000,0xaa72,0x77ad,0xffff,0xaa72,0x77ad,0xffff,0xffff,0x77ad,0xffff,0xffff,0xffff,0x0000,0xaa72,0x77ad,0xffff]
 
     init(resources: RCResources) { self.resources = resources }
+
+    func clear() {
+        pixels = [UInt32](repeating: 0xff000000, count: width * height)
+        bargraphLastColumn = -1; bargraphMax = -1; bargraphLastMax = -1
+    }
 
     func apply(_ commands: [RCCommand]) {
         for command in commands { apply(command) }

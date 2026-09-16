@@ -5,7 +5,7 @@ enum OfflineRecording: String, CaseIterable, Identifiable {
     case long = "RC-long"
 
     var id: String { rawValue }
-    var title: String { self == .short ? "Krátký záznam (65 obrazových rámců)" : "Dlouhý záznam (695 obrazových rámců)" }
+    var title: String { self == .short ? "Short recording (65 frames)" : "Long recording (695 frames)" }
 }
 
 struct OfflineRCFrame {

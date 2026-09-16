@@ -2,6 +2,50 @@ import XCTest
 @testable import miniEXView
 
 final class ProtocolTests: XCTestCase {
+    func testLocalizedCatalogsAndStorageDecode() throws {
+        for language in ["English", "Japanese", "Arabic", "TraditionalChinese", "SimplifiedChinese", "German", "Polish"] {
+            let catalog = try RCResources.load(language: language)
+            XCTAssertEqual(catalog.bitmaps.count, 43, language)
+            XCTAssertNotNil(RCDisplay(resources: catalog).image())
+        }
+        var stored = Data(repeating: 0, count: 16)
+        let packed = UInt32(24 << 26 | 9 << 22 | 16 << 17 | 13 << 12 | 42 << 6 | 5)
+        for i in 0..<4 { stored[i] = UInt8(truncatingIfNeeded: packed >> (8*i)) }
+        stored[4] = 37; stored[8] = 80; stored[14] = 0x12
+        let record = try StoredRecordCodec.decode(stored, index: 0)
+        XCTAssertEqual(record.value, 37)
+        XCTAssertEqual(record.period, 80)
+        XCTAssertEqual(record.mode, 1)
+        XCTAssertTrue(record.alarm)
+    }
+    @MainActor func testDownloaderUsesStorageCommandsAndReadsRecord() throws {
+        let downloader = DataDownload()
+        var sent: [(UInt8, UInt16, Data)] = []
+        downloader.send = { sent.append(($0, $1, $2)) }
+        downloader.start()
+        XCTAssertEqual(sent.last?.1, 0x0401)
+        func reply(_ pid: UInt8, _ id: UInt16, _ payload: Data) {
+            downloader.receive(CMMessage(targetPID: 4, sourcePID: pid, flags: 0x40, messageID: id, payload: payload))
+        }
+        reply(4, 0x0401, Data(repeating: 0, count: 7))
+        reply(7, 0x0B06, Data([0x12, 0x02]))
+        var config = Data(repeating: 0, count: 20)
+        config[4] = 0x3f; config[8] = 2; config[10] = 16; config[12] = 4; config[14] = 16; config[18] = 14
+        reply(8, 0x0D05, config)
+        var status = Data(repeating: 0, count: 11)
+        status[0] = 16
+        reply(8, 0x0D06, status)
+        XCTAssertEqual(sent.last?.1, 0x0502)
+        XCTAssertEqual(sent.last?.2.count, 6)
+        var final = Data(repeating: 0, count: 20)
+        final[0] = 0x30; final[18] = 0xff
+        reply(5, 0x0502, final)
+        XCTAssertEqual(sent.last?.1, 0x0D03)
+        XCTAssertEqual(sent.last?.2, Data([0, 0, 0, 0]))
+        reply(8, 0x0D03, Data(repeating: 0, count: 16))
+        XCTAssertEqual(downloader.collected.count, 1)
+        XCTAssertFalse(downloader.isBusy)
+    }
     func testCapturedLogsAndRemoteRenderer() throws {
         let resource = try RCResources.load()
         XCTAssertEqual(resource.bitmaps.count, 43)

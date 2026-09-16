@@ -107,6 +107,7 @@ jobs:
           test -f "$APP_PATH/$EXECUTABLE"
           file "$APP_PATH/$EXECUTABLE" | grep -q 'arm64'
           test -f "$APP_PATH/EnglishRC.json"
+          test -f "$APP_PATH/LocalizedRC.json"
           test -f "$APP_PATH/RC-short.txt"
           test -f "$APP_PATH/RC-long.txt"
           mkdir -p Payload
@@ -123,7 +124,7 @@ jobs:
       - name: Upload unsigned iPhone IPA
         uses: actions/upload-artifact@v4
         with:
-          name: miniEXView-v0.9.6-build7-iPhone-unsigned-${{ env.CONFIGURATION }}
+          name: miniEXView-v0.9.7-build8-iPhone-unsigned-${{ env.CONFIGURATION }}
           path: miniEXView-unsigned.ipa
           if-no-files-found: error
           retention-days: 30
