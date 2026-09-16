@@ -2,15 +2,20 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var model: AppModel; @State private var showConnection = false; @State private var showAbout = false; @State private var shareURL: URL?
+    @State private var selectedTab = 0
     var body: some View {
-        NavigationView { TabView {
-            RemoteView().tabItem { Label("Remote Control", systemImage: "display") }
-            SettingsView().tabItem { Label("Device", systemImage: "slider.horizontal.3") }
-            DataView(shareURL: $shareURL).tabItem { Label("Data", systemImage: "tablecells") }
-            DiagnosticsView().tabItem { Label("Diagnostics", systemImage: "waveform.path.ecg") }
+        NavigationView { TabView(selection: $selectedTab) {
+            RemoteView().tabItem { Label("Remote Control", systemImage: "display") }.tag(0)
+            SettingsView().tabItem { Label("Device", systemImage: "slider.horizontal.3") }.tag(1)
+            DataView(shareURL: $shareURL).tabItem { Label("Data", systemImage: "tablecells") }.tag(2)
+            DiagnosticsView().tabItem { Label("Diagnostics", systemImage: "waveform.path.ecg") }.tag(3)
         }.navigationTitle("miniEXPLONIX View").toolbar { ToolbarItem(placement: .navigationBarTrailing) { Menu {
             Button("Connection") { showConnection = true }; Button("About") { showAbout = true }; Button("Offline demo") { model.demo() }; Divider(); Button(model.isConnected ? "Disconnect" : "Connect via Wi-Fi") { model.isConnected ? model.disconnect() : model.connect() }
-        } label: { Image(systemName: "ellipsis.circle") } } }.sheet(isPresented: $showConnection) { ConnectionView() }.sheet(isPresented: $showAbout) { AboutView() }.sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) { if let shareURL { ShareView(url: shareURL) } } }
+        } label: { Image(systemName: "ellipsis.circle") } } }.onChange(of: selectedTab) { tab in
+            if tab == 1 && model.isConnected { model.refreshSettings() }
+        }.onChange(of: model.isConnected) { connected in
+            if connected && selectedTab == 1 { model.refreshSettings() }
+        }.sheet(isPresented: $showConnection) { ConnectionView() }.sheet(isPresented: $showAbout) { AboutView() }.sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) { if let shareURL { ShareView(url: shareURL) } } }
     }
 }
 
@@ -23,8 +28,10 @@ struct RemoteView: View {
             if let image = model.displayImage { Image(uiImage: image).resizable().interpolation(.none) }
             else if model.isOfflineDemo { Canvas { context, size in let sx = size.width/160, sy = size.height/128; for y in 0..<128 { for x in 0..<160 { context.fill(Path(CGRect(x:CGFloat(x)*sx,y:CGFloat(y)*sy,width:sx+0.5,height:sy+0.5)),with:.color(model.pixels[y*160+x])) } } } }
             else { Color.black }
-        }.aspectRatio(160.0/128.0,contentMode:.fit).background(.black).clipShape(RoundedRectangle(cornerRadius:8)).overlay(RoundedRectangle(cornerRadius:8).stroke(.gray,lineWidth:5)).scaleEffect(zoom).gesture(MagnificationGesture().onChanged { zoom = min(max($0,1),4) })
-        Button(model.remoteActive ? "RC OFF" : "RC ON") { model.toggleRemote() }.buttonStyle(.borderedProminent).disabled(!model.isConnected)
+        }.aspectRatio(160.0/128.0,contentMode:.fit).background(.black)
+            .padding(5).background(RoundedRectangle(cornerRadius: 9).fill(.gray))
+            .scaleEffect(zoom).gesture(MagnificationGesture().onChanged { zoom = min(max($0,1),4) })
+        Button(model.remoteActive ? "RC OFF" : "RC ON") { model.toggleRemote() }.buttonStyle(.borderedProminent).disabled(!model.isConnected || !model.deviceSupportsRemote)
         if model.isOfflineDemo {
             Picker("Recording", selection: $recording) {
                 ForEach(OfflineRecording.allCases) { item in Text(item.title).tag(item) }
@@ -58,17 +65,24 @@ struct RemoteView: View {
 
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
-    var body: some View { Form { Section("Device") { HStack { Text("Firmware"); Spacer(); Text(model.firmware).foregroundColor(.secondary) }; HStack { Text("Serial number"); Spacer(); Text(model.serial).foregroundColor(.secondary) }; Picker("Mode",selection:$model.parameters.mode) { Text("Wide Range").tag(0); Text("Advanced").tag(1); Text("TATP").tag(2) }; Toggle("Wi‑Fi flag",isOn:$model.parameters.wifi) }
+    @FocusState private var activeField: String?
+    var body: some View { Form {
+        Section { HStack {
+            Button("Read from device") { activeField = nil; model.refreshSettings() }
+            Spacer()
+            Button("Save to device") { activeField = nil; model.saveSettings() }
+        }.buttonStyle(.bordered).disabled(!model.isConnected) }
+        Section("Device") { HStack { Text("Firmware"); Spacer(); Text(model.firmware).foregroundColor(.secondary) }; HStack { Text("Serial number"); Spacer(); Text(model.serial).foregroundColor(.secondary) }; Picker("Mode",selection:$model.parameters.mode) { Text("Wide Range").tag(0); Text("Advanced").tag(1); Text("TATP").tag(2) }; Toggle("Wi‑Fi flag",isOn:$model.parameters.wifi) }
         threshold("Wide Range",zero:$model.parameters.wideZero,alarm:$model.parameters.wideAlarm); threshold("Advanced",zero:$model.parameters.advancedZero,alarm:$model.parameters.advancedAlarm); threshold("TATP",zero:$model.parameters.tatpZero,alarm:$model.parameters.tatpAlarm)
         Section("Languages") {
             Picker("Primary language", selection: $model.parameters.primaryLanguage) { ForEach(model.supportedLanguages, id: \.self) { id in Text(model.languageName(id)).tag(id) } }
             Picker("Secondary language", selection: $model.parameters.secondaryLanguage) { ForEach(model.supportedLanguages, id: \.self) { id in Text(model.languageName(id)).tag(id) } }
         }
         Section("Time and sound") { value("Time to OFF",$model.parameters.offTime); value("Sampling Period",$model.parameters.sampling); value("Beep Volume",$model.parameters.beep); value("Alarm Volume",$model.parameters.alarm); value("IR Sampling Power",$model.parameters.irPower) }
-        Section { Button("Read from device") { model.refreshSettings() }; Button("Save to device") { model.saveSettings() }.disabled(!model.isConnected); Button("Restore factory defaults",role:.destructive) { model.restoreDefaults() }.disabled(!model.isConnected) }
-    }.background(KeyboardDismissArea()) }
-    private func threshold(_ title:String,zero:Binding<Double>,alarm:Binding<Double>)->some View { Section(title) { value("Zero threshold",zero); value("Alarm threshold",alarm) } }
-    private func value(_ title:String,_ binding:Binding<Double>)->some View { HStack { Text(title); Spacer(); TextField(title,value:binding,format:.number).multilineTextAlignment(.trailing).keyboardType(.decimalPad).frame(width:110) } }
+        Section { Button("Restore factory defaults",role:.destructive) { activeField = nil; model.restoreDefaults() }.disabled(!model.isConnected) }
+    }.background(KeyboardDismissArea { activeField = nil }) }
+    private func threshold(_ title:String,zero:Binding<Double>,alarm:Binding<Double>)->some View { Section(title) { value("Zero threshold",zero,id:title+".zero"); value("Alarm threshold",alarm,id:title+".alarm") } }
+    private func value(_ title:String,_ binding:Binding<Double>,id:String? = nil)->some View { HStack { Text(title); Spacer(); TextField(title,value:binding,format:.number).multilineTextAlignment(.trailing).keyboardType(.decimalPad).focused($activeField, equals: id ?? title).frame(width:110) } }
 }
 
 struct DataView: View {
@@ -113,21 +127,35 @@ struct DiagnosticsView: View {
 }
 
 private struct KeyboardDismissArea: UIViewRepresentable {
+    let dismissFocus: () -> Void
     func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        DispatchQueue.main.async {
-            guard let parent = view.superview else { return }
-            let gesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.dismiss))
-            gesture.cancelsTouchesInView = false
-            gesture.delegate = context.coordinator
-            parent.addGestureRecognizer(gesture)
-        }
+        let view = WindowProbe(frame: .zero)
+        view.windowChanged = { [weak coordinator = context.coordinator] window in coordinator?.attach(to: window) }
+        context.coordinator.dismissFocus = dismissFocus
         return view
     }
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    func updateUIView(_ uiView: UIView, context: Context) { context.coordinator.dismissFocus = dismissFocus }
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) { coordinator.attach(to: nil) }
     func makeCoordinator() -> Coordinator { Coordinator() }
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        @objc func dismiss() { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
+        var dismissFocus: (() -> Void)?
+        private weak var observedWindow: UIWindow?
+        private lazy var gesture: UITapGestureRecognizer = {
+            let recognizer = UITapGestureRecognizer(target: self, action: #selector(dismiss))
+            recognizer.cancelsTouchesInView = false
+            recognizer.delegate = self
+            return recognizer
+        }()
+        func attach(to window: UIWindow?) {
+            guard observedWindow !== window else { return }
+            observedWindow?.removeGestureRecognizer(gesture)
+            observedWindow = window
+            window?.addGestureRecognizer(gesture)
+        }
+        @objc func dismiss() {
+            dismissFocus?()
+            observedWindow?.endEditing(true)
+        }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
             var view: UIView? = touch.view
             while let current = view {
@@ -136,5 +164,9 @@ private struct KeyboardDismissArea: UIViewRepresentable {
             }
             return true
         }
+    }
+    final class WindowProbe: UIView {
+        var windowChanged: ((UIWindow?) -> Void)?
+        override func didMoveToWindow() { super.didMoveToWindow(); windowChanged?(window) }
     }
 }

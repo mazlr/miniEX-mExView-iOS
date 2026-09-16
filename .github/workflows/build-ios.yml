@@ -124,7 +124,7 @@ jobs:
       - name: Upload unsigned iPhone IPA
         uses: actions/upload-artifact@v4
         with:
-          name: miniEXView-v0.9.8-build9-iPhone-unsigned-${{ env.CONFIGURATION }}
+          name: miniEXView-v0.9.9-build10-iPhone-unsigned-${{ env.CONFIGURATION }}
           path: miniEXView-unsigned.ipa
           if-no-files-found: error
           retention-days: 30

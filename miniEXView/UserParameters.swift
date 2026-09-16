@@ -30,6 +30,7 @@ struct MiniEXFirmwareVersion: Equatable {
         default: return 0
         }
     }
+    var supportsRemoteControl: Bool { availableModes > 0 }
     static func from(word: UInt16) -> MiniEXFirmwareVersion {
         let code = word & 0x1fff
         return .init(rawWord: word, firmwareCode: code, major: Int((code & 0x1f00) >> 8), minor: Int(code & 0xff), model: Int((word >> 13) & 7))

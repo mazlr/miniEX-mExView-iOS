@@ -150,6 +150,8 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(version.displayName, "2.18")
         XCTAssertEqual(version.dataTypeSize, 3)
         XCTAssertEqual(version.availableModes, 3)
+        XCTAssertTrue(version.supportsRemoteControl)
+        XCTAssertFalse(MiniEXFirmwareVersion.from(word: 0).supportsRemoteControl)
     }
     func testUserParameterRoundTripWithSignedHeatFlow() throws {
         let raw = [1234,321,600*16,15*16,4,5,0x0193,-50,2345,456,3456,567,0]
