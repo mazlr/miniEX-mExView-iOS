@@ -7,6 +7,7 @@ struct ContentView: View {
             RemoteView().tabItem { Label("Ovládání", systemImage: "display") }
             SettingsView().tabItem { Label("Přístroj", systemImage: "slider.horizontal.3") }
             DataView(shareURL: $shareURL).tabItem { Label("Data", systemImage: "tablecells") }
+            DiagnosticsView().tabItem { Label("Diagnostika", systemImage: "waveform.path.ecg") }
         }.navigationTitle("miniEX mExView").toolbar { ToolbarItem(placement: .navigationBarTrailing) { Menu {
             Button("Připojení") { showConnection = true }; Button("Offline demo") { model.demo() }; Divider(); Button(model.isConnected ? "Odpojit" : "Připojit přes Wi‑Fi") { model.isConnected ? model.disconnect() : model.connect() }
         } label: { Image(systemName: "ellipsis.circle") } } }.sheet(isPresented: $showConnection) { ConnectionView() }.sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) { if let shareURL { ShareView(url: shareURL) } } }
@@ -52,3 +53,15 @@ struct ConnectionView: View {
 }
 
 struct ShareView: UIViewControllerRepresentable { let url:URL; func makeUIViewController(context:Context)->UIActivityViewController { UIActivityViewController(activityItems:[url],applicationActivities:nil) }; func updateUIViewController(_ uiViewController:UIActivityViewController,context:Context){} }
+
+struct DiagnosticsView: View {
+    @EnvironmentObject var model: AppModel
+    var body: some View { VStack(spacing: 0) {
+        Form {
+            Section("Socket") { HStack { Text("Stav"); Spacer(); Text(model.connectionState).foregroundColor(model.isConnected ? .green : .secondary) }; HStack { Text("Cíl"); Spacer(); Text("\(model.host):\(model.port)").font(.caption.monospaced()) } }
+            Section("Počítadla") { HStack { Text("Odesláno"); Spacer(); Text("\(model.bytesSent) B") }; HStack { Text("Přijato"); Spacer(); Text("\(model.bytesReceived) B") }; HStack { Text("Pakety / CM"); Spacer(); Text("\(model.packetCount) / \(model.cmMessageCount)") } }
+            Section { HStack { Button("Kopírovat log") { UIPasteboard.general.string = model.diagnosticText }; Spacer(); Button("Vymazat", role: .destructive) { model.clearDiagnostics() } } }
+        }.frame(height: 310)
+        ScrollView { Text(model.diagnosticText.isEmpty ? "Zatím nejsou žádné události." : model.diagnosticText).font(.system(size: 11, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading).padding() }.background(Color.black).foregroundColor(.green)
+    } }
+}

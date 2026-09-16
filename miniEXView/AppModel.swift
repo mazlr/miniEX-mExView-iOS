@@ -13,16 +13,40 @@ struct MeasuredRecord: Identifiable, Codable {
     @Published var connectionState = "Odpojeno"; @Published var status = "Připraveno"; @Published var isConnected = false
     @Published var pixels = Array(repeating: Color.black, count: 160 * 128); @Published var records: [MeasuredRecord] = []
     @Published var parameters = DeviceParameters(); @Published var firmware = "—"; @Published var serial = "—"
+    @Published private(set) var diagnosticLines: [String] = []
+    @Published private(set) var bytesSent = 0
+    @Published private(set) var bytesReceived = 0
+    @Published private(set) var packetCount = 0
+    @Published private(set) var cmMessageCount = 0
     @Published private(set) var parameterBounds = MiniEXParameterBounds.defaults
     private var firmwareVersion: MiniEXFirmwareVersion?
     private let transport: MiniEXTransport = TCPTransport(); private let decoder = PacketStreamDecoder()
     init() {
-        transport.onState = { [weak self] value in Task { @MainActor in self?.connectionState = value; self?.isConnected = value == "Připojeno"; if value == "Připojeno" { self?.startRemote() } } }
-        transport.onData = { [weak self] data in Task { @MainActor in self?.consume(data) } }
+        appendDiagnostic("Aplikace spuštěna, verze 0.9.1 (2)")
+        transport.onState = { [weak self] value in Task { @MainActor in
+            guard let self else { return }
+            self.connectionState = value; self.isConnected = value == "Připojeno"
+            self.appendDiagnostic("SOCKET: \(value)")
+            if value == "Připojeno" { self.startRemote() }
+        } }
+        transport.onData = { [weak self] data in Task { @MainActor in
+            guard let self else { return }
+            self.bytesReceived += data.count; self.appendDiagnostic("RX TCP: \(data.count) B"); self.consume(data)
+        } }
     }
-    func connect(bridge: Bool = false) { transport.connect(host: bridge ? bridgeHost : host, port: UInt16(clamping: bridge ? bridgePort : port)) }
-    func disconnect() { transport.disconnect() }
-    func sendCM(_ id: UInt16, payload: Data = Data(), target: UInt8 = 5) { transport.send(PacketCodec.build(receiver: "a", sender: "b", id: id, payload: CMCodec.encode(target: target, source: 3, id: id, payload: payload))) }
+    func connect(bridge: Bool = false) {
+        let selectedHost = bridge ? bridgeHost : host; let selectedPort = UInt16(clamping: bridge ? bridgePort : port)
+        appendDiagnostic("CONNECT: \(selectedHost):\(selectedPort) režim=\(bridge ? "bridge" : "Wi-Fi")")
+        transport.connect(host: selectedHost, port: selectedPort)
+    }
+    func disconnect() { appendDiagnostic("DISCONNECT: požadavek uživatele"); transport.disconnect() }
+    func sendCM(_ id: UInt16, payload: Data = Data(), target: UInt8 = 5) {
+        let cm = CMCodec.encode(target: target, source: 3, id: id, payload: payload)
+        let packet = PacketCodec.build(receiver: "a", sender: "b", id: id, payload: cm)
+        bytesSent += packet.count
+        appendDiagnostic("TX CM: id=0x\(String(format: "%04X", id)) target=\(target) data=\(payload.count) B packet=\(packet.count) B")
+        transport.send(packet)
+    }
     func startRemote() { sendCM(WireMessage.streamOn); sendCM(WireMessage.redraw) }
     func speed(down: Bool) { sendCM(down ? WireMessage.keyPress : WireMessage.keyRelease) }
     func refreshSettings() {
@@ -85,7 +109,26 @@ struct MeasuredRecord: Identifiable, Codable {
         }
         try? lines.joined(separator: "\n").write(to: f, atomically: true, encoding: .utf8); return f
     }
-    private func consume(_ data: Data) { do { for packet in try decoder.append(data) { for message in try CMCodec.decodeAll(packet.payload) { handle(message) } } } catch { status = error.localizedDescription } }
+    func clearDiagnostics() { diagnosticLines.removeAll(); bytesSent = 0; bytesReceived = 0; packetCount = 0; cmMessageCount = 0; appendDiagnostic("Diagnostika vymazána") }
+    var diagnosticText: String { diagnosticLines.joined(separator: "\n") }
+    private func consume(_ data: Data) {
+        do {
+            for packet in try decoder.append(data) {
+                packetCount += 1
+                appendDiagnostic("RX PACKET: type=\(packet.type) id=0x\(String(format: "%04X", packet.id)) data=\(packet.payload.count) B")
+                for message in try CMCodec.decodeAll(packet.payload) {
+                    cmMessageCount += 1
+                    appendDiagnostic("RX CM: id=0x\(String(format: "%04X", message.messageID)) source=\(message.sourcePID) flags=0x\(String(format: "%02X", message.flags)) data=\(message.payload.count) B")
+                    handle(message)
+                }
+            }
+        } catch { status = error.localizedDescription; appendDiagnostic("DECODE ERROR: \(error.localizedDescription)") }
+    }
+    private func appendDiagnostic(_ text: String) {
+        let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss.SSS"
+        diagnosticLines.append("[\(formatter.string(from: Date()))] \(text)")
+        if diagnosticLines.count > 500 { diagnosticLines.removeFirst(diagnosticLines.count - 500) }
+    }
     private func handle(_ m: CMMessage) {
         switch m.messageID {
         case WireMessage.getFirmware:

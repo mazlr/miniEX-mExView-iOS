@@ -1,5 +1,7 @@
 # miniEX mExView for iPhone
 
+Aktuální vydání: **0.9.1 (build 2)**.
+
 Nativní přepis Android aplikace pro iOS 15+ ve SwiftUI. USB vrstva je záměrně
 vynechána. Aplikace zachovává TCP/Wi-Fi komunikaci, internet bridge, packetový a
 CMCore protokol, vzdálený displej, nastavení přístroje, přehled naměřených dat a
@@ -21,7 +23,7 @@ podporovaný síťový adaptér bez změn UI a protokolu.
 1. Nahrajte obsah této složky do kořene GitHub repozitáře.
 2. Otevřete **Actions → Build iOS → Run workflow** (workflow se nespouští automaticky).
 3. Zvolte `Release` nebo `Debug` a spusťte workflow.
-4. Po dokončení stáhněte artefakt `miniEXView-iPhone-unsigned-Release`.
+4. Po dokončení stáhněte artefakt `miniEXView-v0.9.1-build2-iPhone-unsigned-Release`.
 
 Workflow se spouští pouze ručně. Používá GitHub runner `macos-15`, Xcode 16.4 a
 nevyžaduje žádné secrets. Výsledkem je nepodepsané IPA zkompilované pro fyzický
