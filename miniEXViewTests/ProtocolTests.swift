@@ -42,9 +42,27 @@ final class ProtocolTests: XCTestCase {
             XCTAssertNotNil(display.image())
         }
     }
-    func testAlphaHex() throws { XCTAssertEqual(AlphaHex.encode(Data([0,0x1f,0xa5,0xff])),"AA BP KF PP".replacingOccurrences(of:" ",with:"")); XCTAssertEqual(try AlphaHex.decode("BEEF"[...]),0x1445) }
-    func testPacketRoundTrip() throws { let built=PacketCodec.build(receiver:"a",sender:"b",id:0x1234,payload:Data("hello".utf8)); let decoded=try PacketStreamDecoder().append(built); XCTAssertEqual(decoded.first?.id,0x1234); XCTAssertEqual(decoded.first?.payload,Data("hello".utf8)) }
-    func testCMRoundTrip() throws { let data=CMCodec.encode(target:5,source:3,id:0x0241,payload:Data([1,2])); let decoded=try CMCodec.decodeAll(data); XCTAssertEqual(decoded.first?.messageID,0x0241); XCTAssertEqual(decoded.first?.payload,Data([1,2])) }
+    func testAlphaHex() throws {
+        let encoded = AlphaHex.encode(Data([0, 0x1f, 0xa5, 0xff]))
+        XCTAssertEqual(encoded, "AABPKFPP")
+        let decoded: Int = try AlphaHex.decode("BEEF"[...])
+        XCTAssertEqual(decoded, 0x144c)
+    }
+    func testPacketRoundTrip() throws {
+        let built = PacketCodec.build(receiver: "a", sender: "b", id: 0x1234, payload: Data("hello".utf8))
+        let decoded = try PacketStreamDecoder().append(built)
+        XCTAssertEqual(decoded.count, 1)
+        XCTAssertEqual(decoded[0].id, 0x1234)
+        XCTAssertEqual(decoded[0].payload, Data("hello".utf8))
+    }
+    func testCMRoundTrip() throws {
+        let data = CMCodec.encode(target: 5, source: 3, id: 0x0241, payload: Data([1, 2]))
+        let decoded = try CMCodec.decodeAll(data)
+        XCTAssertEqual(decoded.first?.messageID, 0x0241)
+        XCTAssertEqual(decoded.first?.targetPID, 5)
+        XCTAssertEqual(decoded.first?.sourcePID, 3)
+        XCTAssertEqual(decoded.first?.payload, Data([1, 2]))
+    }
     func testAndroidCapturedKeyPressPacket() throws {
         let cm = CMCodec.encode(target: 6, source: 5, flags: 0x20, id: WireMessage.keyPress)
         let packet = PacketCodec.build(id: 0x00ab, payload: cm)
