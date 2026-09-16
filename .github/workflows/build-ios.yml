@@ -48,8 +48,89 @@ jobs:
       - name: Run protocol and RC decoder tests
         run: |
           set -o pipefail
-          SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for group in d.values() for x in group if "iP[...]
+          SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for group in d.values() for x in group if "iPhone" in x["name"]))')
           xcodebuild test \
             -project miniEXView.xcodeproj \
             -scheme miniEXView \
-?
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -derivedDataPath "$DERIVED_DATA" \
+            -resultBundlePath "$DERIVED_DATA/TestResults" \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee xcodebuild-tests.log
+
+      - name: Extract and display test results
+        if: always()
+        run: |
+          echo "=== Test Results Summary ==="
+          xcresulttool get --path "$DERIVED_DATA/TestResults.xcresult" --format json 2>/dev/null | \
+            jq '.issues._values[] | select(.type == "Test Failure") | .message.text' 2>/dev/null || echo "No detailed results available"
+          
+          echo ""
+          echo "=== Full Test Output ==="
+          cat xcodebuild-tests.log
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TestResults.xcresult
+          path: ${{ env.DERIVED_DATA }}/TestResults.xcresult
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Build for physical iPhone
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project miniEXView.xcodeproj \
+            -scheme miniEXView \
+            -configuration "$CONFIGURATION" \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            | tee xcodebuild.log
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH="$DERIVED_DATA/Build/Products/$CONFIGURATION-iphoneos/miniEXView.app"
+          test -d "$APP_PATH"
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist")
+          test -n "$EXECUTABLE"
+          test -f "$APP_PATH/$EXECUTABLE"
+          file "$APP_PATH/$EXECUTABLE" | grep -q 'arm64'
+          test -f "$APP_PATH/EnglishRC.json"
+          test -f "$APP_PATH/RC-short.txt"
+          test -f "$APP_PATH/RC-long.txt"
+          mkdir -p Payload
+          ditto "$APP_PATH" Payload/miniEXView.app
+          ditto -c -k --sequesterRsrc --keepParent Payload miniEXView-unsigned.ipa
+
+      - name: Verify IPA executable
+        run: |
+          rm -rf verify-ipa
+          ditto -x -k miniEXView-unsigned.ipa verify-ipa
+          test -f verify-ipa/Payload/miniEXView.app/miniEXView
+          file verify-ipa/Payload/miniEXView.app/miniEXView | grep -q 'arm64'
+
+      - name: Upload unsigned iPhone IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: miniEXView-v0.9.5-build6-iPhone-unsigned-${{ env.CONFIGURATION }}
+          path: miniEXView-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: miniEXView-xcodebuild-log
+          path: |
+            xcodebuild.log
+            xcodebuild-tests.log
+          if-no-files-found: ignore
+          retention-days: 14
