@@ -15,14 +15,27 @@ struct ContentView: View {
 }
 
 struct RemoteView: View {
-    @EnvironmentObject var model: AppModel; @State private var zoom = 1.0
+    @EnvironmentObject var model: AppModel; @State private var zoom = 1.0; @State private var touchingDeviceKey = false
     var body: some View { VStack(spacing: 14) {
         Text(model.connectionState).font(.caption).foregroundStyle(model.isConnected ? .green : .secondary)
         Canvas { context, size in let sx = size.width/160, sy = size.height/128; for y in 0..<128 { for x in 0..<160 { context.fill(Path(CGRect(x:CGFloat(x)*sx,y:CGFloat(y)*sy,width:sx+0.5,height:sy+0.5)),with:.color(model.pixels[y*160+x])) } } }
             .aspectRatio(160/128,contentMode:.fit).background(.black).clipShape(RoundedRectangle(cornerRadius:8)).overlay(RoundedRectangle(cornerRadius:8).stroke(.gray,lineWidth:5)).scaleEffect(zoom).gesture(MagnificationGesture().onChanged { zoom = min(max($0,1),4) })
-        Button { } label: { Label("Rychlost", systemImage:"gauge.with.dots.needle.67percent") }.buttonStyle(.borderedProminent).simultaneousGesture(DragGesture(minimumDistance:0).onChanged { _ in model.speed(down:true) }.onEnded { _ in model.speed(down:false) })
+        Label("Tlačítko přístroje", systemImage: "power")
+            .frame(maxWidth: .infinity).padding()
+            .background(touchingDeviceKey ? Color.orange : Color.blue)
+            .foregroundColor(.white).cornerRadius(12)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if !touchingDeviceKey { touchingDeviceKey = true; model.pressDeviceKey() }
+                }
+                .onEnded { _ in touchingDeviceKey = false; model.releaseDeviceKey() })
+            .disabled(!model.isConnected)
+            .accessibilityLabel("Stisknout tlačítko přístroje")
+        Button("Vyžádat překreslení") { model.sendCM(WireMessage.redraw, target: 2) }
+            .disabled(!model.isConnected)
         Text(model.status).font(.footnote).foregroundStyle(.secondary)
-    }.padding() }
+    }.padding().onDisappear { touchingDeviceKey = false; model.releaseDeviceKey() } }
 }
 
 struct SettingsView: View {
@@ -58,8 +71,8 @@ struct DiagnosticsView: View {
     @EnvironmentObject var model: AppModel
     var body: some View { VStack(spacing: 0) {
         Form {
-            Section("Socket") { HStack { Text("Stav"); Spacer(); Text(model.connectionState).foregroundColor(model.isConnected ? .green : .secondary) }; HStack { Text("Cíl"); Spacer(); Text("\(model.host):\(model.port)").font(.caption.monospaced()) } }
-            Section("Počítadla") { HStack { Text("Odesláno"); Spacer(); Text("\(model.bytesSent) B") }; HStack { Text("Přijato"); Spacer(); Text("\(model.bytesReceived) B") }; HStack { Text("Pakety / CM"); Spacer(); Text("\(model.packetCount) / \(model.cmMessageCount)") } }
+            Section("Socket") { HStack { Text("Stav"); Spacer(); Text(model.connectionState).foregroundColor(model.isConnected ? .green : .secondary) }; HStack { Text("Aktivní cíl"); Spacer(); Text(model.activeEndpoint).font(.caption.monospaced()) } }
+            Section("Počítadla") { HStack { Text("Předáno TCP"); Spacer(); Text("\(model.bytesSent) B") }; HStack { Text("Zařazeno"); Spacer(); Text("\(model.bytesQueued) B") }; HStack { Text("Přijato"); Spacer(); Text("\(model.bytesReceived) B") }; HStack { Text("Pakety / CM"); Spacer(); Text("\(model.packetCount) / \(model.cmMessageCount)") } }
             Section { HStack { Button("Kopírovat log") { UIPasteboard.general.string = model.diagnosticText }; Spacer(); Button("Vymazat", role: .destructive) { model.clearDiagnostics() } } }
         }.frame(height: 310)
         ScrollView { Text(model.diagnosticText.isEmpty ? "Zatím nejsou žádné události." : model.diagnosticText).font(.system(size: 11, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading).padding() }.background(Color.black).foregroundColor(.green)

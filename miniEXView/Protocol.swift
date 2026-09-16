@@ -31,7 +31,7 @@ enum AlphaHex {
 struct MiniEXPacket: Equatable { let type: Character; let receiver: Character; let sender: Character; let id: UInt16; let payload: Data }
 
 enum PacketCodec {
-    static func build(type: Character = "d", receiver: Character, sender: Character, id: UInt16, payload: Data) -> Data {
+    static func build(type: Character = "0", receiver: Character = "0", sender: Character = "2", id: UInt16, payload: Data) -> Data {
         precondition(payload.count <= 255)
         let head = "#\(type)\(receiver)\(sender) \(AlphaHex.encode(Int(id), digits: 4)) \(AlphaHex.encode(payload.count, digits: 2)) "
         var body = Data(head.utf8); body.append(payload)
@@ -43,6 +43,7 @@ enum PacketCodec {
 
 final class PacketStreamDecoder {
     private var buffer = Data()
+    func reset() { buffer.removeAll(keepingCapacity: true) }
     func append(_ bytes: Data) throws -> [MiniEXPacket] {
         buffer.append(bytes); var packets: [MiniEXPacket] = []
         while let marker = buffer.firstIndex(of: 35) {
@@ -70,10 +71,13 @@ enum CMCodec {
         return Data(("*a" + AlphaHex.encode(payload.count, digits: 2) + AlphaHex.encode(bytes)).utf8)
     }
     static func decodeAll(_ data: Data) throws -> [CMMessage] {
-        let text = String(decoding: data, as: UTF8.self); var out: [CMMessage] = []; var p = text.startIndex
+        guard let text = String(data: data, encoding: .ascii) else { throw CodecError.malformed("CM paket není ASCII.") }
+        var out: [CMMessage] = []; var p = text.startIndex
         while let r = text.range(of: "*a", range: p..<text.endIndex) {
-            let lenStart = r.upperBound, lenEnd = text.index(lenStart, offsetBy: 2); let n = try AlphaHex.decode(text[lenStart..<lenEnd])
-            let end = text.index(lenEnd, offsetBy: 10 + n * 2); guard end <= text.endIndex else { throw CodecError.malformed("Neúplná CM zpráva.") }
+            let lenStart = r.upperBound
+            guard let lenEnd = text.index(lenStart, offsetBy: 2, limitedBy: text.endIndex) else { throw CodecError.malformed("Neúplná délka CM zprávy.") }
+            let n = try AlphaHex.decode(text[lenStart..<lenEnd])
+            guard let end = text.index(lenEnd, offsetBy: 10 + n * 2, limitedBy: text.endIndex) else { throw CodecError.malformed("Neúplná CM zpráva.") }
             let raw = try AlphaHex.data(text[lenEnd..<end]); guard raw.count == n + 5 else { throw CodecError.malformed("Chybná délka CM zprávy.") }
             out.append(.init(targetPID: raw[0], sourcePID: raw[1], flags: raw[2], messageID: UInt16(raw[3]) | UInt16(raw[4]) << 8, payload: raw.dropFirst(5)))
             p = end
@@ -88,4 +92,3 @@ enum WireMessage {
     static let getSerial: UInt16 = 0x0B05, getFirmware: UInt16 = 0x0B06, getLanguages: UInt16 = 0x0B09
     static let getBounds: UInt16 = 0x0520, getParameters: UInt16 = 0x0521, setParameters: UInt16 = 0x0522, defaults: UInt16 = 0x0523
 }
-

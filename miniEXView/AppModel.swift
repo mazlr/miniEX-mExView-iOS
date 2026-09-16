@@ -15,40 +15,78 @@ struct MeasuredRecord: Identifiable, Codable {
     @Published var parameters = DeviceParameters(); @Published var firmware = "—"; @Published var serial = "—"
     @Published private(set) var diagnosticLines: [String] = []
     @Published private(set) var bytesSent = 0
+    @Published private(set) var bytesQueued = 0
     @Published private(set) var bytesReceived = 0
     @Published private(set) var packetCount = 0
     @Published private(set) var cmMessageCount = 0
     @Published private(set) var parameterBounds = MiniEXParameterBounds.defaults
     private var firmwareVersion: MiniEXFirmwareVersion?
+    private var nextPacketID: UInt16 = 0
+    private var deviceKeyHeld = false
+    private var connectedEndpoint = "—"
     private let transport: MiniEXTransport = TCPTransport(); private let decoder = PacketStreamDecoder()
     init() {
-        appendDiagnostic("Aplikace spuštěna, verze 0.9.1 (2)")
+        appendDiagnostic("Aplikace spuštěna, verze 0.9.2 (3)")
         transport.onState = { [weak self] value in Task { @MainActor in
             guard let self else { return }
             self.connectionState = value; self.isConnected = value == "Připojeno"
             self.appendDiagnostic("SOCKET: \(value)")
             if value == "Připojeno" { self.startRemote() }
+            else if self.deviceKeyHeld { self.deviceKeyHeld = false; self.appendDiagnostic("RC KEY: spojení skončilo během stisku") }
+        } }
+        transport.onWrite = { [weak self] count, error in Task { @MainActor in
+            guard let self else { return }
+            if let error { self.appendDiagnostic("TX ERROR: \(count) B: \(error)"); self.status = error }
+            else { self.bytesSent += count; self.appendDiagnostic("TX COMPLETE: \(count) B předáno TCP stacku (odpověď přístroje se ověřuje zvlášť)") }
         } }
         transport.onData = { [weak self] data in Task { @MainActor in
             guard let self else { return }
-            self.bytesReceived += data.count; self.appendDiagnostic("RX TCP: \(data.count) B"); self.consume(data)
+            self.bytesReceived += data.count
+            self.appendDiagnostic("RX TCP: \(data.count) B")
+            self.appendDiagnostic("RX CHUNK ASCII: \(String(decoding: data, as: UTF8.self))")
+            self.appendDiagnostic("RX CHUNK HEX: \(data.map { String(format: "%02X", $0) }.joined(separator: " "))")
+            self.consume(data)
         } }
     }
     func connect(bridge: Bool = false) {
         let selectedHost = bridge ? bridgeHost : host; let selectedPort = UInt16(clamping: bridge ? bridgePort : port)
+        guard !selectedHost.isEmpty, selectedPort > 0 else { appendDiagnostic("CONNECT ERROR: neplatný host nebo port"); return }
+        releaseDeviceKey()
+        decoder.reset()
+        connectedEndpoint = "\(selectedHost):\(selectedPort)"
         appendDiagnostic("CONNECT: \(selectedHost):\(selectedPort) režim=\(bridge ? "bridge" : "Wi-Fi")")
         transport.connect(host: selectedHost, port: selectedPort)
     }
-    func disconnect() { appendDiagnostic("DISCONNECT: požadavek uživatele"); transport.disconnect() }
-    func sendCM(_ id: UInt16, payload: Data = Data(), target: UInt8 = 5) {
-        let cm = CMCodec.encode(target: target, source: 3, id: id, payload: payload)
-        let packet = PacketCodec.build(receiver: "a", sender: "b", id: id, payload: cm)
-        bytesSent += packet.count
-        appendDiagnostic("TX CM: id=0x\(String(format: "%04X", id)) target=\(target) data=\(payload.count) B packet=\(packet.count) B")
+    func disconnect() { releaseDeviceKey(); appendDiagnostic("DISCONNECT: požadavek uživatele"); transport.disconnect() }
+    var activeEndpoint: String { connectedEndpoint }
+    func sendCM(_ id: UInt16, payload: Data = Data(), target: UInt8, source: UInt8 = 5, flags: UInt8 = 0x20) {
+        guard isConnected else { appendDiagnostic("TX SKIPPED: socket není připraven, CM=0x\(String(format: "%04X", id))"); return }
+        let cm = CMCodec.encode(target: target, source: source, flags: flags, id: id, payload: payload)
+        let packetID = nextPacketID
+        nextPacketID &+= 1
+        let packet = PacketCodec.build(id: packetID, payload: cm)
+        bytesQueued += packet.count
+        appendDiagnostic("TX PACKET: #002 id=0x\(String(format: "%04X", packetID)) len=\(cm.count) B checksum=\(String(decoding: packet.suffix(4), as: UTF8.self))")
+        appendDiagnostic("TX CM: target=0x\(String(format: "%02X", target)) source=0x\(String(format: "%02X", source)) flags=0x\(String(format: "%02X", flags)) id=0x\(String(format: "%04X", id)) data=\(payload.count) B")
+        appendDiagnostic("TX ASCII: \(String(decoding: packet, as: UTF8.self))")
+        appendDiagnostic("TX HEX: \(packet.map { String(format: "%02X", $0) }.joined(separator: " "))")
         transport.send(packet)
     }
-    func startRemote() { sendCM(WireMessage.streamOn); sendCM(WireMessage.redraw) }
-    func speed(down: Bool) { sendCM(down ? WireMessage.keyPress : WireMessage.keyRelease) }
+    func startRemote() {
+        // Android MiniExProtocol.remoteOn(): retries=0, timeout=500 ms, little endian.
+        sendCM(WireMessage.streamOn, payload: Data([0, 0, 0xf4, 0x01]), target: 1, flags: 0)
+        sendCM(WireMessage.redraw, target: 2)
+    }
+    func pressDeviceKey() {
+        guard isConnected, !deviceKeyHeld else { return }
+        deviceKeyHeld = true
+        sendCM(WireMessage.keyPress, target: 6)
+    }
+    func releaseDeviceKey() {
+        guard deviceKeyHeld else { return }
+        deviceKeyHeld = false
+        sendCM(WireMessage.keyRelease, target: 6)
+    }
     func refreshSettings() {
         let requests: [UInt16] = [
             WireMessage.getFirmware,
@@ -57,20 +95,23 @@ struct MeasuredRecord: Identifiable, Codable {
             WireMessage.getBounds,
             WireMessage.getParameters
         ]
-        requests.forEach { sendCM($0) }
+        for request in requests {
+            let target: UInt8 = request == WireMessage.getBounds || request == WireMessage.getParameters ? 5 : 7
+            sendCM(request, target: target, source: 3, flags: 0)
+        }
         status = "Načítám nastavení…"
     }
     func saveSettings() {
         do {
             let wireValues = parameters.wireValues(bounds: parameterBounds)
             let payload = try MiniEXUserParametersCodec.encodeValues(wireValues, dataTypeSize: firmwareVersion?.dataTypeSize ?? 3)
-            sendCM(WireMessage.setParameters, payload: payload)
+            sendCM(WireMessage.setParameters, payload: payload, target: 5, source: 3, flags: 0)
             status = "Nastavení odesláno."
         } catch { status = error.localizedDescription }
     }
-    func restoreDefaults() { sendCM(WireMessage.defaults); parameters = DeviceParameters(); status = "Výchozí nastavení vyžádáno." }
-    func refreshData() { status = "Načítám data…"; sendCM(0x0B01); sendCM(0x0B06); sendCM(0x0501, target: 6) }
-    func eraseData() { sendCM(0x0502, target: 6); records = []; status = "Požadavek na smazání odeslán." }
+    func restoreDefaults() { sendCM(WireMessage.defaults, target: 5, source: 3, flags: 0); parameters = DeviceParameters(); status = "Výchozí nastavení vyžádáno." }
+    func refreshData() { status = "Načítám data…"; sendCM(0x0B01, target: 7, source: 3, flags: 0); sendCM(0x0B06, target: 7, source: 3, flags: 0); sendCM(0x0501, target: 5, source: 3, flags: 0) }
+    func eraseData() { sendCM(0x0502, target: 5, source: 3, flags: 0); status = "Požadavek na smazání odeslán." }
     func demo() {
         isConnected = false; connectionState = "Offline demo"; status = "Ukázkový obsah bez přístroje"
         let dark = Color(red: 0.04, green: 0.10, blue: 0.13)
@@ -109,16 +150,22 @@ struct MeasuredRecord: Identifiable, Codable {
         }
         try? lines.joined(separator: "\n").write(to: f, atomically: true, encoding: .utf8); return f
     }
-    func clearDiagnostics() { diagnosticLines.removeAll(); bytesSent = 0; bytesReceived = 0; packetCount = 0; cmMessageCount = 0; appendDiagnostic("Diagnostika vymazána") }
+    func clearDiagnostics() { diagnosticLines.removeAll(); bytesSent = 0; bytesQueued = 0; bytesReceived = 0; packetCount = 0; cmMessageCount = 0; appendDiagnostic("Diagnostika vymazána") }
     var diagnosticText: String { diagnosticLines.joined(separator: "\n") }
     private func consume(_ data: Data) {
         do {
             for packet in try decoder.append(data) {
                 packetCount += 1
-                appendDiagnostic("RX PACKET: type=\(packet.type) id=0x\(String(format: "%04X", packet.id)) data=\(packet.payload.count) B")
+                appendDiagnostic("RX PACKET: type=\(packet.type) to=\(packet.receiver) from=\(packet.sender) id=0x\(String(format: "%04X", packet.id)) data=\(packet.payload.count) B")
+                appendDiagnostic("RX ASCII: \(String(decoding: packet.payload, as: UTF8.self))")
                 for message in try CMCodec.decodeAll(packet.payload) {
                     cmMessageCount += 1
                     appendDiagnostic("RX CM: id=0x\(String(format: "%04X", message.messageID)) source=\(message.sourcePID) flags=0x\(String(format: "%02X", message.flags)) data=\(message.payload.count) B")
+                    if message.targetPID == 5, message.sourcePID == 1, message.messageID == WireMessage.stream, message.payload.count >= 2 {
+                        let sequence = Data(message.payload.prefix(2))
+                        appendDiagnostic("RX RC: seq=\(UInt16(sequence[0]) | UInt16(sequence[1]) << 8), ACK")
+                        sendCM(WireMessage.stream, payload: sequence, target: 1)
+                    }
                     handle(message)
                 }
             }
