@@ -41,7 +41,9 @@ jobs:
         run: xcodebuild -list -project miniEXView.xcodeproj
 
       - name: Replay captured miniEX traffic
-        run: python3 tools/verify_logs.py
+        run: |
+          python3 tools/verify_logs.py
+          python3 tools/verify_replay_resources.py
 
       - name: Run protocol and RC decoder tests
         run: |
@@ -80,6 +82,8 @@ jobs:
           test -f "$APP_PATH/$EXECUTABLE"
           file "$APP_PATH/$EXECUTABLE" | grep -q 'arm64'
           test -f "$APP_PATH/EnglishRC.json"
+          test -f "$APP_PATH/RC-short.txt"
+          test -f "$APP_PATH/RC-long.txt"
           mkdir -p Payload
           ditto "$APP_PATH" Payload/miniEXView.app
           ditto -c -k --sequesterRsrc --keepParent Payload miniEXView-unsigned.ipa
@@ -94,7 +98,7 @@ jobs:
       - name: Upload unsigned iPhone IPA
         uses: actions/upload-artifact@v4
         with:
-          name: miniEXView-v0.9.4-build5-iPhone-unsigned-${{ env.CONFIGURATION }}
+          name: miniEXView-v0.9.5-build6-iPhone-unsigned-${{ env.CONFIGURATION }}
           path: miniEXView-unsigned.ipa
           if-no-files-found: error
           retention-days: 30

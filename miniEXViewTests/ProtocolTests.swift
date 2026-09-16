@@ -22,6 +22,7 @@ final class ProtocolTests: XCTestCase {
                     for message in try CMCodec.decodeAll(packet.payload) where message.targetPID == 5 && message.sourcePID == 1 && message.messageID == WireMessage.stream {
                         let (_, commands) = try RCStream.decode(message.payload)
                         display.apply(commands)
+                        XCTAssertNotNil(display.image(), "Vykreslení selhalo po RC rámci \(totalRC + 1) souboru \(file)")
                         totalRC += 1
                     }
                 }
@@ -30,6 +31,16 @@ final class ProtocolTests: XCTestCase {
         }
         XCTAssertEqual(totalRC, 760)
         XCTAssertNotNil(display.image())
+    }
+    func testBundledOfflineReplayUsesCapturedFrames() throws {
+        let expected: [(OfflineRecording, Int)] = [(.short, 65), (.long, 695)]
+        for (recording, count) in expected {
+            let frames = try OfflineReplay.load(recording)
+            XCTAssertEqual(frames.count, count)
+            let display = RCDisplay(resources: try RCResources.load())
+            for frame in frames { display.apply(frame.commands) }
+            XCTAssertNotNil(display.image())
+        }
     }
     func testAlphaHex() throws { XCTAssertEqual(AlphaHex.encode(Data([0,0x1f,0xa5,0xff])),"AA BP KF PP".replacingOccurrences(of:" ",with:"")); XCTAssertEqual(try AlphaHex.decode("BEEF"[...]),0x1445) }
     func testPacketRoundTrip() throws { let built=PacketCodec.build(receiver:"a",sender:"b",id:0x1234,payload:Data("hello".utf8)); let decoded=try PacketStreamDecoder().append(built); XCTAssertEqual(decoded.first?.id,0x1234); XCTAssertEqual(decoded.first?.payload,Data("hello".utf8)) }

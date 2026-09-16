@@ -14,19 +14,19 @@ final class DiagnosticLog {
         url = directory.appendingPathComponent(name)
         FileManager.default.createFile(atPath: url.path, contents: nil)
         handle = try? FileHandle(forWritingTo: url)
-        write("START miniEX mExView \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] ?? "?") (\(Bundle.main.infoDictionary?["CFBundleVersion"] ?? "?"))")
+        write("START miniEX mExView \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] ?? "?") (\(Bundle.main.infoDictionary?["CFBundleVersion"] ?? "?"))", flush: true)
     }
 
-    func write(_ message: String) {
+    func write(_ message: String, flush: Bool = false) {
         lock.lock(); defer { lock.unlock() }
         let stamp = Self.lineDate.string(from: Date())
         guard let data = "[\(stamp)] \(message)\n".data(using: .utf8) else { return }
         handle?.write(data)
-        handle?.synchronizeFile()
+        if flush { handle?.synchronizeFile() }
     }
 
     func rawTCP(_ data: Data) {
-        write("RAW RX \(data.count) B: \(data.map { String(format: "%02X", $0) }.joined(separator: " "))")
+        write("RAW RX \(data.count) B: \(data.map { String(format: "%02X", $0) }.joined(separator: " "))", flush: true)
     }
 
     private static let lineDate: DateFormatter = {

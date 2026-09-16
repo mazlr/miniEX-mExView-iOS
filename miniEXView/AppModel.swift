@@ -19,6 +19,10 @@ struct MeasuredRecord: Identifiable, Codable {
     @Published private(set) var bytesReceived = 0
     @Published private(set) var packetCount = 0
     @Published private(set) var cmMessageCount = 0
+    @Published private(set) var isOfflineDemo = false
+    @Published private(set) var replayPlaying = false
+    @Published private(set) var replayProgress = 0
+    @Published private(set) var replayTotal = 0
     @Published private(set) var parameterBounds = MiniEXParameterBounds.defaults
     private var firmwareVersion: MiniEXFirmwareVersion?
     private var nextPacketID: UInt16 = 0
@@ -27,6 +31,10 @@ struct MeasuredRecord: Identifiable, Codable {
     private let transport: MiniEXTransport = TCPTransport(); private let decoder = PacketStreamDecoder()
     private let log = DiagnosticLog()
     private var display: RCDisplay?
+    private var replayTask: Task<Void, Never>?
+    private var refreshScheduled = false
+    private var receivedRCFrames = 0
+    private var successfulWrites = 0
     var diagnosticFileURL: URL { log.url }
     init() {
         do { display = RCDisplay(resources: try RCResources.load()); displayImage = display?.image() }
@@ -35,6 +43,7 @@ struct MeasuredRecord: Identifiable, Codable {
         transport.onRawData = { [log] data in log.rawTCP(data) }
         transport.onState = { [weak self] value in Task { @MainActor in
             guard let self else { return }
+            if self.isOfflineDemo { return }
             self.connectionState = value; self.isConnected = value == "Připojeno"
             self.appendDiagnostic("SOCKET: \(value)")
             if value != "Připojeno" {
@@ -46,22 +55,32 @@ struct MeasuredRecord: Identifiable, Codable {
         transport.onWrite = { [weak self] count, error in Task { @MainActor in
             guard let self else { return }
             if let error { self.appendDiagnostic("TX ERROR: \(count) B: \(error)"); self.status = error }
-            else { self.bytesSent += count; self.appendDiagnostic("TX COMPLETE: \(count) B předáno TCP stacku (odpověď přístroje se ověřuje zvlášť)") }
+            else {
+                self.bytesSent += count
+                self.successfulWrites += 1
+                if self.successfulWrites == 1 || self.successfulWrites.isMultiple(of: 20) {
+                    self.appendDiagnostic("TX COMPLETE: \(self.successfulWrites) zápisů, \(self.bytesSent) B předáno TCP stacku")
+                }
+            }
         } }
         transport.onData = { [weak self] data in Task { @MainActor in
-            guard let self else { return }
+            guard let self, !self.isOfflineDemo else { return }
             self.bytesReceived += data.count
             self.appendDiagnostic("RX TCP: \(data.count) B")
-            self.appendDiagnostic("RX CHUNK ASCII: \(String(decoding: data, as: UTF8.self))")
-            self.appendDiagnostic("RX CHUNK HEX: \(data.map { String(format: "%02X", $0) }.joined(separator: " "))")
+            // Every raw byte is already persisted before this callback by onRawData.
             self.consume(data)
         } }
     }
     func connect(bridge: Bool = false) {
+        cancelReplay()
+        isOfflineDemo = false
         let selectedHost = bridge ? bridgeHost : host; let selectedPort = UInt16(clamping: bridge ? bridgePort : port)
         guard !selectedHost.isEmpty, selectedPort > 0 else { appendDiagnostic("CONNECT ERROR: neplatný host nebo port"); return }
         releaseDeviceKey()
         decoder.reset()
+        receivedRCFrames = 0
+        do { display = RCDisplay(resources: try RCResources.load()); displayImage = display?.image() }
+        catch { appendDiagnostic("RC RESOURCES ERROR: \(error.localizedDescription)") }
         connectedEndpoint = "\(selectedHost):\(selectedPort)"
         appendDiagnostic("CONNECT: \(selectedHost):\(selectedPort) režim=\(bridge ? "bridge" : "Wi-Fi")")
         transport.connect(host: selectedHost, port: selectedPort)
@@ -75,10 +94,14 @@ struct MeasuredRecord: Identifiable, Codable {
         nextPacketID &+= 1
         let packet = PacketCodec.build(id: packetID, payload: cm)
         bytesQueued += packet.count
-        appendDiagnostic("TX PACKET: #002 id=0x\(String(format: "%04X", packetID)) len=\(cm.count) B checksum=\(String(decoding: packet.suffix(4), as: UTF8.self))")
-        appendDiagnostic("TX CM: target=0x\(String(format: "%02X", target)) source=0x\(String(format: "%02X", source)) flags=0x\(String(format: "%02X", flags)) id=0x\(String(format: "%04X", id)) data=\(payload.count) B")
-        appendDiagnostic("TX ASCII: \(String(decoding: packet, as: UTF8.self))")
-        appendDiagnostic("TX HEX: \(packet.map { String(format: "%02X", $0) }.joined(separator: " "))")
+        if id == WireMessage.stream && payload.count == 2 && flags == 0x20 {
+            log.write("TX RC ACK packet=\(packetID) seq=\(UInt16(payload[0]) | UInt16(payload[1]) << 8) ASCII=\(String(decoding: packet, as: UTF8.self))")
+        } else {
+            appendDiagnostic("TX PACKET: #002 id=0x\(String(format: "%04X", packetID)) len=\(cm.count) B checksum=\(String(decoding: packet.suffix(4), as: UTF8.self))")
+            appendDiagnostic("TX CM: target=0x\(String(format: "%02X", target)) source=0x\(String(format: "%02X", source)) flags=0x\(String(format: "%02X", flags)) id=0x\(String(format: "%04X", id)) data=\(payload.count) B")
+            appendDiagnostic("TX ASCII: \(String(decoding: packet, as: UTF8.self))")
+            appendDiagnostic("TX HEX: \(packet.map { String(format: "%02X", $0) }.joined(separator: " "))")
+        }
         transport.send(packet)
     }
     func startRemote() {
@@ -133,6 +156,9 @@ struct MeasuredRecord: Identifiable, Codable {
     func refreshData() { status = "Načítám data…"; sendCM(0x0B01, target: 7, source: 3, flags: 0); sendCM(0x0B06, target: 7, source: 3, flags: 0); sendCM(0x0501, target: 5, source: 3, flags: 0) }
     func eraseData() { sendCM(0x0502, target: 5, source: 3, flags: 0); status = "Požadavek na smazání odeslán." }
     func demo() {
+        cancelReplay()
+        if isConnected { disconnect() }
+        isOfflineDemo = true
         isConnected = false; connectionState = "Offline demo"; status = "Ukázkový obsah bez přístroje"
         let dark = Color(red: 0.04, green: 0.10, blue: 0.13)
         let light = Color(red: 0.08, green: 0.25, blue: 0.30)
@@ -159,6 +185,46 @@ struct MeasuredRecord: Identifiable, Codable {
         }
         records = demoRecords
     }
+    func playOffline(_ recording: OfflineRecording) {
+        demo()
+        do {
+            let frames = try OfflineReplay.load(recording)
+            let resources = try RCResources.load()
+            display = RCDisplay(resources: resources)
+            displayImage = display?.image()
+            replayTotal = frames.count
+            replayProgress = 0
+            replayPlaying = true
+            status = "Přehrávám \(recording.title)"
+            appendDiagnostic("OFFLINE START: \(recording.rawValue), \(frames.count) RC rámců")
+            replayTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                for (index, frame) in frames.enumerated() {
+                    if Task.isCancelled { break }
+                    self.display?.apply(frame.commands)
+                    if index.isMultiple(of: 4) || index == frames.count - 1 {
+                        self.displayImage = self.display?.image()
+                        self.replayProgress = index + 1
+                    }
+                    try? await Task.sleep(nanoseconds: 25_000_000)
+                }
+                if !Task.isCancelled {
+                    self.replayPlaying = false
+                    self.status = "Záznam zpracován: \(self.replayProgress) / \(self.replayTotal) rámců"
+                    self.appendDiagnostic("OFFLINE END: \(self.replayProgress) / \(self.replayTotal)")
+                }
+            }
+        } catch {
+            status = "Chyba offline přehrávání: \(error.localizedDescription)"
+            appendDiagnostic("OFFLINE ERROR: \(error.localizedDescription)")
+        }
+    }
+    func cancelReplay() {
+        if replayPlaying { status = "Přehrávání zastaveno na rámci \(replayProgress)." }
+        replayTask?.cancel()
+        replayTask = nil
+        replayPlaying = false
+    }
     func exportTSV() -> URL? {
         let f = FileManager.default.temporaryDirectory.appendingPathComponent("miniEX-data.tsv")
         let df = ISO8601DateFormatter()
@@ -176,19 +242,29 @@ struct MeasuredRecord: Identifiable, Codable {
         do {
             for packet in try decoder.append(data) {
                 packetCount += 1
-                appendDiagnostic("RX PACKET: type=\(packet.type) to=\(packet.receiver) from=\(packet.sender) id=0x\(String(format: "%04X", packet.id)) data=\(packet.payload.count) B")
-                appendDiagnostic("RX ASCII: \(String(decoding: packet.payload, as: UTF8.self))")
-                for message in try CMCodec.decodeAll(packet.payload) {
+                let messages = try CMCodec.decodeAll(packet.payload)
+                let containsRC = messages.contains { $0.targetPID == 5 && $0.sourcePID == 1 && $0.messageID == WireMessage.stream }
+                if !containsRC {
+                    appendDiagnostic("RX PACKET: type=\(packet.type) to=\(packet.receiver) from=\(packet.sender) id=0x\(String(format: "%04X", packet.id)) data=\(packet.payload.count) B")
+                    appendDiagnostic("RX ASCII: \(String(decoding: packet.payload, as: UTF8.self))")
+                }
+                for message in messages {
                     cmMessageCount += 1
-                    appendDiagnostic("RX CM: id=0x\(String(format: "%04X", message.messageID)) source=\(message.sourcePID) flags=0x\(String(format: "%02X", message.flags)) data=\(message.payload.count) B")
+                    if !containsRC { appendDiagnostic("RX CM: id=0x\(String(format: "%04X", message.messageID)) source=\(message.sourcePID) flags=0x\(String(format: "%02X", message.flags)) data=\(message.payload.count) B") }
                     if message.targetPID == 5, message.sourcePID == 1, message.messageID == WireMessage.stream, message.payload.count >= 2 {
                         let sequence = Data(message.payload.prefix(2))
+                        let sequenceNumber = UInt16(sequence[0]) | UInt16(sequence[1]) << 8
                         sendCM(WireMessage.stream, payload: sequence, target: 1)
                         do {
                             let (_, commands) = try RCStream.decode(message.payload)
+                            log.write("RC FRAME BEGIN seq=\(sequenceNumber) commands=\(commands.map { String(format: "%02X", $0.id) }.joined(separator: ","))", flush: true)
                             display?.apply(commands)
-                            displayImage = display?.image()
-                            appendDiagnostic("RX RC: seq=\(UInt16(sequence[0]) | UInt16(sequence[1]) << 8), commands=\(commands.count), ACK")
+                            scheduleDisplayRefresh()
+                            receivedRCFrames += 1
+                            log.write("RC FRAME END seq=\(sequenceNumber)")
+                            if receivedRCFrames == 1 || receivedRCFrames.isMultiple(of: 20) {
+                                appendDiagnostic("RX RC: \(receivedRCFrames) rámců, seq=\(sequenceNumber), commands=\(commands.count), ACK")
+                            }
                         } catch { appendDiagnostic("RC DECODE ERROR: \(error.localizedDescription)") }
                     }
                     if message.targetPID == 5, message.sourcePID == 1, message.messageID == WireMessage.streamOff, message.flags & 0x40 != 0 {
@@ -199,8 +275,19 @@ struct MeasuredRecord: Identifiable, Codable {
             }
         } catch { status = error.localizedDescription; appendDiagnostic("DECODE ERROR: \(error.localizedDescription)") }
     }
+    private func scheduleDisplayRefresh() {
+        guard !refreshScheduled else { return }
+        refreshScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            guard let self else { return }
+            self.refreshScheduled = false
+            if !self.isOfflineDemo { self.displayImage = self.display?.image() }
+        }
+    }
     private func appendDiagnostic(_ text: String) {
-        log.write(text)
+        let important = text.hasPrefix("SOCKET:") || text.hasPrefix("CONNECT:") || text.contains("ERROR:")
+        log.write(text, flush: important)
         let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss.SSS"
         diagnosticLines.append("[\(formatter.string(from: Date()))] \(text)")
         if diagnosticLines.count > 500 { diagnosticLines.removeFirst(diagnosticLines.count - 500) }

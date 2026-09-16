@@ -16,6 +16,7 @@ struct ContentView: View {
 
 struct RemoteView: View {
     @EnvironmentObject var model: AppModel; @State private var zoom = 1.0; @State private var touchingDeviceKey = false
+    @State private var recording: OfflineRecording = .short
     var body: some View { VStack(spacing: 14) {
         Text(model.connectionState).font(.caption).foregroundStyle(model.isConnected ? .green : .secondary)
         Group {
@@ -23,6 +24,19 @@ struct RemoteView: View {
             else { Canvas { context, size in let sx = size.width/160, sy = size.height/128; for y in 0..<128 { for x in 0..<160 { context.fill(Path(CGRect(x:CGFloat(x)*sx,y:CGFloat(y)*sy,width:sx+0.5,height:sy+0.5)),with:.color(model.pixels[y*160+x])) } } } }
         }.aspectRatio(160.0/128.0,contentMode:.fit).background(.black).clipShape(RoundedRectangle(cornerRadius:8)).overlay(RoundedRectangle(cornerRadius:8).stroke(.gray,lineWidth:5)).scaleEffect(zoom).gesture(MagnificationGesture().onChanged { zoom = min(max($0,1),4) })
         Button(model.remoteActive ? "Vypnout remote control" : "Zapnout remote control") { model.toggleRemote() }.buttonStyle(.borderedProminent).disabled(!model.isConnected)
+        if model.isOfflineDemo {
+            Picker("Záznam", selection: $recording) {
+                ForEach(OfflineRecording.allCases) { item in Text(item.title).tag(item) }
+            }
+            HStack {
+                Button("Přehrát záznam") { model.playOffline(recording) }.disabled(model.replayPlaying)
+                if model.replayPlaying { Button("Zastavit") { model.cancelReplay() } }
+            }.buttonStyle(.bordered)
+            if model.replayTotal > 0 {
+                ProgressView(value: Double(model.replayProgress), total: Double(model.replayTotal))
+                Text("\(model.replayProgress) / \(model.replayTotal) rámců").font(.caption)
+            }
+        }
         Label("Tlačítko přístroje", systemImage: "power")
             .frame(maxWidth: .infinity).padding()
             .background(touchingDeviceKey ? Color.orange : Color.blue)

@@ -1,6 +1,6 @@
 # miniEX mExView for iPhone
 
-Aktuální vydání: **0.9.4 (build 5)**.
+Aktuální vydání: **0.9.5 (build 6)**.
 
 ### Diagnostika připojení
 
@@ -14,6 +14,10 @@ ještě před dekódováním. Přes **Diagnostika → Sdílet úplný log** ode�
 například do e-mailu nebo aplikace Soubory. I po pádu aplikace ho najdete v
 **Soubory → Na mém iPhonu → miniEX mExView → miniEX-logs**. Vymazání zobrazené
 diagnostiky soubor nesmaže. Po každém novém spuštění vznikne nový soubor.
+
+V **Offline demo** lze na záložce Ovládání přehrát krátký (65 rámců) nebo
+dlouhý (695 rámců) skutečný záznam miniEX. Přehraje se kompletní dekodér
+a vykreslování, ale bez síťového připojení.
 
 Remote Control zapněte tlačítkem na záložce **Ovládání** až po otevření socketu;
 stejné tlačítko ho zase vypne. Díky tomu lze odděleně sledovat otevření TCP,
@@ -42,7 +46,7 @@ podporovaný síťový adaptér bez změn UI a protokolu.
 1. Nahrajte obsah této složky do kořene GitHub repozitáře.
 2. Otevřete **Actions → Build iOS → Run workflow** (workflow se nespouští automaticky).
 3. Zvolte `Release` nebo `Debug` a spusťte workflow.
-4. Po dokončení stáhněte artefakt `miniEXView-v0.9.4-build5-iPhone-unsigned-Release`.
+4. Po dokončení stáhněte artefakt `miniEXView-v0.9.5-build6-iPhone-unsigned-Release`.
 
 Workflow se spouští pouze ručně. Nejdříve ověří šest přiložených záznamů a
 provede testy dekodéru na iOS simulátoru, poté sestaví IPA pro fyzický telefon.
