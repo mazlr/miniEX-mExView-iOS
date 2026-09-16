@@ -1,0 +1,54 @@
+import SwiftUI
+
+struct ContentView: View {
+    @EnvironmentObject var model: AppModel; @State private var showConnection = false; @State private var shareURL: URL?
+    var body: some View {
+        NavigationView { TabView {
+            RemoteView().tabItem { Label("Ovládání", systemImage: "display") }
+            SettingsView().tabItem { Label("Přístroj", systemImage: "slider.horizontal.3") }
+            DataView(shareURL: $shareURL).tabItem { Label("Data", systemImage: "tablecells") }
+        }.navigationTitle("miniEX mExView").toolbar { ToolbarItem(placement: .navigationBarTrailing) { Menu {
+            Button("Připojení") { showConnection = true }; Button("Offline demo") { model.demo() }; Divider(); Button(model.isConnected ? "Odpojit" : "Připojit přes Wi‑Fi") { model.isConnected ? model.disconnect() : model.connect() }
+        } label: { Image(systemName: "ellipsis.circle") } } }.sheet(isPresented: $showConnection) { ConnectionView() }.sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) { if let shareURL { ShareView(url: shareURL) } } }
+    }
+}
+
+struct RemoteView: View {
+    @EnvironmentObject var model: AppModel; @State private var zoom = 1.0
+    var body: some View { VStack(spacing: 14) {
+        Text(model.connectionState).font(.caption).foregroundStyle(model.isConnected ? .green : .secondary)
+        Canvas { context, size in let sx = size.width/160, sy = size.height/128; for y in 0..<128 { for x in 0..<160 { context.fill(Path(CGRect(x:CGFloat(x)*sx,y:CGFloat(y)*sy,width:sx+0.5,height:sy+0.5)),with:.color(model.pixels[y*160+x])) } } }
+            .aspectRatio(160/128,contentMode:.fit).background(.black).clipShape(RoundedRectangle(cornerRadius:8)).overlay(RoundedRectangle(cornerRadius:8).stroke(.gray,lineWidth:5)).scaleEffect(zoom).gesture(MagnificationGesture().onChanged { zoom = min(max($0,1),4) })
+        Button { } label: { Label("Rychlost", systemImage:"gauge.with.dots.needle.67percent") }.buttonStyle(.borderedProminent).simultaneousGesture(DragGesture(minimumDistance:0).onChanged { _ in model.speed(down:true) }.onEnded { _ in model.speed(down:false) })
+        Text(model.status).font(.footnote).foregroundStyle(.secondary)
+    }.padding() }
+}
+
+struct SettingsView: View {
+    @EnvironmentObject var model: AppModel
+    var body: some View { Form { Section("Přístroj") { HStack { Text("Firmware"); Spacer(); Text(model.firmware).foregroundColor(.secondary) }; HStack { Text("Sériové číslo"); Spacer(); Text(model.serial).foregroundColor(.secondary) }; Picker("Režim",selection:$model.parameters.mode) { Text("Wide Range").tag(0); Text("Advanced").tag(1); Text("TATP").tag(2) }; Toggle("Wi‑Fi flag",isOn:$model.parameters.wifi) }
+        threshold("Wide Range",zero:$model.parameters.wideZero,alarm:$model.parameters.wideAlarm); threshold("Advanced",zero:$model.parameters.advancedZero,alarm:$model.parameters.advancedAlarm); threshold("TATP",zero:$model.parameters.tatpZero,alarm:$model.parameters.tatpAlarm)
+        Section("Čas a zvuk") { value("Time to OFF",$model.parameters.offTime); value("Sampling Period",$model.parameters.sampling); value("Beep Volume",$model.parameters.beep); value("Alarm Volume",$model.parameters.alarm); value("IR Sampling Power",$model.parameters.irPower) }
+        Section { Button("Načíst z přístroje") { model.refreshSettings() }; Button("Uložit do přístroje") { model.saveSettings() }.disabled(!model.isConnected); Button("Obnovit tovární nastavení",role:.destructive) { model.restoreDefaults() }.disabled(!model.isConnected) }
+    } }
+    private func threshold(_ title:String,zero:Binding<Double>,alarm:Binding<Double>)->some View { Section(title) { value("Zero threshold",zero); value("Alarm threshold",alarm) } }
+    private func value(_ title:String,_ binding:Binding<Double>)->some View { HStack { Text(title); Spacer(); TextField(title,value:binding,format:.number).multilineTextAlignment(.trailing).keyboardType(.decimalPad).frame(width:110) } }
+}
+
+struct DataView: View {
+    @EnvironmentObject var model: AppModel; @Binding var shareURL: URL?; @State private var confirmErase=false
+    var body: some View { VStack { HStack { Button("Načíst") { model.refreshData() }; Button("Export TSV") { shareURL=model.exportTSV() }.disabled(model.records.isEmpty); Button("Smazat",role:.destructive) { confirmErase=true }.disabled(!model.isConnected) }.buttonStyle(.bordered).padding(.top)
+        List(model.records) { r in HStack { Text("\(r.index)").frame(width:35,alignment:.leading); VStack(alignment:.leading) { Text(r.timestamp,style:.date); Text(r.timestamp,style:.time).font(.caption) }; Spacer(); Text(r.value,format:.number.precision(.fractionLength(3))); if r.alarm { Image(systemName:"exclamationmark.triangle.fill").foregroundStyle(.red) } } }
+    }.confirmationDialog("Opravdu smazat záznamník přístroje?",isPresented:$confirmErase,titleVisibility:.visible) { Button("Smazat",role:.destructive) { model.eraseData() } } }
+}
+
+struct ConnectionView: View {
+    @EnvironmentObject var model: AppModel; @Environment(\.dismiss) var dismiss
+    var body: some View { NavigationView { Form { Section("Wi‑Fi / TCP") { TextField("IP adresa",text:$model.host).autocapitalization(.none).keyboardType(.numbersAndPunctuation); TextField("Port",value:$model.port,format:.number).keyboardType(.numberPad); Button("Připojit") { model.connect(); dismiss() } }
+        Section("Internet bridge") { TextField("Server",text:$model.bridgeHost).autocapitalization(.none); TextField("Port",value:$model.bridgePort,format:.number); TextField("32znakové ID přístroje",text:$model.deviceID); Button("Připojit k bridge") { model.connect(bridge:true); dismiss() }.disabled(model.deviceID.count != 32) }
+        Section("Remote Control") { Picker("Jazyk",selection:$model.rcLanguage) { ForEach(["English","Japanese","Arabic","Traditional Chinese","Simplified Chinese","German","Polish"],id:\.self) { Text($0) } } }
+        Section { Text("USB není v iOS verzi implementováno.").foregroundStyle(.secondary) }
+    }.navigationTitle("Připojení").toolbar { Button("Hotovo") { dismiss() } } } }
+}
+
+struct ShareView: UIViewControllerRepresentable { let url:URL; func makeUIViewController(context:Context)->UIActivityViewController { UIActivityViewController(activityItems:[url],applicationActivities:nil) }; func updateUIViewController(_ uiViewController:UIActivityViewController,context:Context){} }

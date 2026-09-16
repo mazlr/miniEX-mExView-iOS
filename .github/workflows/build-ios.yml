@@ -1,0 +1,81 @@
+name: Build iOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: Build configuration
+        required: true
+        default: Release
+        type: choice
+        options:
+          - Release
+          - Debug
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Unsigned iPhone IPA
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      CONFIGURATION: ${{ inputs.configuration || 'Release' }}
+      DERIVED_DATA: ${{ github.workspace }}/DerivedData
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+
+      - name: Show toolchain
+        run: xcodebuild -version
+
+      - name: Validate project
+        run: xcodebuild -list -project miniEXView.xcodeproj
+
+      - name: Build for physical iPhone
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project miniEXView.xcodeproj \
+            -scheme miniEXView \
+            -configuration "$CONFIGURATION" \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            | tee xcodebuild.log
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH=$(find "$DERIVED_DATA/Build/Products" -type d -name 'miniEXView.app' -print -quit)
+          test -n "$APP_PATH"
+          mkdir -p Payload
+          ditto "$APP_PATH" Payload/miniEXView.app
+          ditto -c -k --sequesterRsrc --keepParent Payload miniEXView-unsigned.ipa
+
+      - name: Upload unsigned iPhone IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: miniEXView-iPhone-unsigned-${{ env.CONFIGURATION }}
+          path: miniEXView-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: miniEXView-xcodebuild-log
+          path: xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 14
