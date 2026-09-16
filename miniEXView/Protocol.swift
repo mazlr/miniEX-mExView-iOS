@@ -42,15 +42,17 @@ enum PacketCodec {
 }
 
 final class PacketStreamDecoder {
-    private var buffer = Data()
+    // Array keeps byte offsets zero-based after consuming a packet. Data slices can
+    // retain their original startIndex, which breaks the next packet in a stream.
+    private var buffer = [UInt8]()
     func reset() { buffer.removeAll(keepingCapacity: true) }
     func append(_ bytes: Data) throws -> [MiniEXPacket] {
-        buffer.append(bytes); var packets: [MiniEXPacket] = []
+        buffer.append(contentsOf: bytes); var packets: [MiniEXPacket] = []
         guard buffer.count <= 65536 else { buffer.removeAll(); throw CodecError.malformed("Přijímací buffer přesáhl 64 KiB.") }
         while let marker = buffer.firstIndex(of: 35) {
             if marker > 0 { buffer.removeFirst(marker) }
             guard buffer.count >= 13 else { break }
-            guard let text = String(data: buffer.prefix(13), encoding: .ascii) else { buffer.removeFirst(); continue }
+            guard let text = String(bytes: buffer.prefix(13), encoding: .ascii) else { buffer.removeFirst(); continue }
             let chars = Array(text); guard chars[4] == " ", chars[9] == " ", chars[12] == " " else { buffer.removeFirst(); continue }
             let length = try AlphaHex.decode(text[text.index(text.startIndex, offsetBy: 10)..<text.index(text.startIndex, offsetBy: 12)])
             let total = 13 + length + 4; guard buffer.count >= total else { break }

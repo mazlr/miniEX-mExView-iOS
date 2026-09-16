@@ -55,6 +55,15 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(decoded[0].id, 0x1234)
         XCTAssertEqual(decoded[0].payload, Data("hello".utf8))
     }
+    func testPacketStreamAcrossPacketsAndFragments() throws {
+        let decoder = PacketStreamDecoder()
+        let first = PacketCodec.build(id: 1, payload: Data("first".utf8))
+        let second = PacketCodec.build(id: 2, payload: Data("second".utf8))
+        XCTAssertEqual(try decoder.append(first).map(\.id), [1])
+        XCTAssertTrue(try decoder.append(second.prefix(7)).isEmpty)
+        XCTAssertEqual(try decoder.append(second.dropFirst(7)).map(\.id), [2])
+        XCTAssertEqual(try decoder.append(first + second).map(\.id), [1, 2])
+    }
     func testCMRoundTrip() throws {
         let data = CMCodec.encode(target: 5, source: 3, id: 0x0241, payload: Data([1, 2]))
         let decoded = try CMCodec.decodeAll(data)

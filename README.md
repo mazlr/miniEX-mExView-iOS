@@ -44,11 +44,11 @@ podporovaný síťový adaptér bez změn UI a protokolu.
 ## Kompilace přes GitHub Actions
 
 1. Nahrajte obsah této složky do kořene GitHub repozitáře.
-2. Otevřete **Actions → Build iOS → Run workflow** (workflow se nespouští automaticky).
-3. Zvolte `Release` nebo `Debug` a spusťte workflow.
-4. Po dokončení stáhněte artefakt `miniEXView-v0.9.5-build6-iPhone-unsigned-Release`.
+2. Po každém commitu do větve `main` se automaticky spustí sestavení `Release`.
+3. Volitelně otevřete **Actions → Build iOS → Run workflow** a spusťte `Release` nebo `Debug` ručně.
+4. Po úspěšném běhu stáhněte artefakt `miniEXView-v0.9.6-build7-iPhone-unsigned-Release`.
 
-Workflow se spouští pouze ručně. Nejdříve ověří šest přiložených záznamů a
+Workflow se spouští po commitu do `main` i ručně. Nejdříve ověří šest přiložených záznamů a
 provede testy dekodéru na iOS simulátoru, poté sestaví IPA pro fyzický telefon.
 Používá GitHub runner `macos-15`, Xcode 16.4 a
 nevyžaduje žádné secrets. Výsledkem je nepodepsané IPA zkompilované pro fyzický

@@ -1,6 +1,9 @@
 name: Build iOS
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       configuration:
@@ -55,7 +58,7 @@ jobs:
             -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
             -derivedDataPath "$DERIVED_DATA" \
-            -resultBundlePath "$DERIVED_DATA/TestResults" \
+            -resultBundlePath "$DERIVED_DATA/TestResults.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild-tests.log
 
@@ -63,8 +66,9 @@ jobs:
         if: always()
         run: |
           echo "=== Test Results Summary ==="
-          xcresulttool get --path "$DERIVED_DATA/TestResults.xcresult" --format json 2>/dev/null | \
-            jq '.issues._values[] | select(.type == "Test Failure") | .message.text' 2>/dev/null || echo "No detailed results available"
+          if [ -d "$DERIVED_DATA/TestResults.xcresult" ]; then
+            xcrun xcresulttool get test-results summary --path "$DERIVED_DATA/TestResults.xcresult" --format json | jq '{result, failedTests, testFailures}'
+          fi
           
           echo ""
           echo "=== Full Test Output ==="
@@ -119,7 +123,7 @@ jobs:
       - name: Upload unsigned iPhone IPA
         uses: actions/upload-artifact@v4
         with:
-          name: miniEXView-v0.9.5-build6-iPhone-unsigned-${{ env.CONFIGURATION }}
+          name: miniEXView-v0.9.6-build7-iPhone-unsigned-${{ env.CONFIGURATION }}
           path: miniEXView-unsigned.ipa
           if-no-files-found: error
           retention-days: 30
