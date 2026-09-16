@@ -2,35 +2,101 @@ import Foundation
 import Network
 
 protocol MiniEXTransport: AnyObject {
-    var onData: ((Data) -> Void)? { get set }; var onState: ((String) -> Void)? { get set }
+    var onData: ((Data) -> Void)? { get set }
+    var onState: ((String) -> Void)? { get set }
     var onWrite: ((Int, String?) -> Void)? { get set }
-    func connect(host: String, port: UInt16); func send(_ data: Data); func disconnect()
+    func connect(host: String, port: UInt16)
+    func send(_ data: Data)
+    func disconnect()
 }
 
+/// All connection changes run on one serial queue. Old callbacks cannot
+/// report a cancelled socket as the state of a newly opened connection.
 final class TCPTransport: MiniEXTransport {
-    var onData: ((Data) -> Void)?; var onState: ((String) -> Void)?
+    var onData: ((Data) -> Void)?
+    var onState: ((String) -> Void)?
     var onWrite: ((Int, String?) -> Void)?
-    private let queue = DispatchQueue(label: "miniEX.tcp"); private var connection: NWConnection?
+
+    private let queue = DispatchQueue(label: "miniEX.tcp")
+    private var connection: NWConnection?
+    private var ready = false
+
     func connect(host: String, port: UInt16) {
-        disconnect(); let c = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: .tcp); connection = c
-        c.stateUpdateHandler = { [weak self] state in
-            switch state {
-            case .ready: self?.onState?("Připojeno"); self?.receive()
-            case .waiting(let e): self?.onState?("Čekám: \(e.localizedDescription)")
-            case .failed(let e): self?.onState?("Chyba: \(e.localizedDescription)")
-            case .cancelled: self?.onState?("Odpojeno")
-            default: break
+        queue.async { [self] in
+            let previous = connection
+            connection = nil
+            ready = false
+            previous?.cancel()
+
+            let current = NWConnection(
+                host: NWEndpoint.Host(host),
+                port: NWEndpoint.Port(rawValue: port)!,
+                using: .tcp
+            )
+            connection = current
+            onState?("Připojuji…")
+            current.stateUpdateHandler = { [weak self, weak current] state in
+                guard let self, let current, self.connection === current else { return }
+                switch state {
+                case .ready:
+                    self.ready = true
+                    self.onState?("Připojeno")
+                    self.receive(from: current)
+                case .waiting(let error):
+                    self.ready = false
+                    self.onState?("Čekám na síť: \(error.localizedDescription)")
+                case .failed(let error):
+                    self.close(current, reason: "Chyba socketu: \(error.localizedDescription)")
+                case .cancelled:
+                    self.close(current, reason: "Odpojeno: spojení zrušeno")
+                default:
+                    break
+                }
             }
-        }; c.start(queue: queue); onState?("Připojuji…")
+            current.start(queue: queue)
+        }
     }
+
     func send(_ data: Data) {
-        guard let connection else { onWrite?(data.count, "Socket není otevřen."); return }
-        connection.send(content: data, completion: .contentProcessed { [weak self] error in
-            self?.onWrite?(data.count, error?.localizedDescription)
-        })
+        queue.async { [self] in
+            guard let current = connection, ready else {
+                onWrite?(data.count, "Socket není připraven.")
+                return
+            }
+            current.send(content: data, completion: .contentProcessed { [weak self, weak current] error in
+                guard let self, let current, self.connection === current else { return }
+                self.onWrite?(data.count, error?.localizedDescription)
+                if let error { self.close(current, reason: "Chyba zápisu: \(error.localizedDescription)") }
+            })
+        }
     }
-    func disconnect() { connection?.cancel(); connection = nil; onState?("Odpojeno") }
-    private func receive() { connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, done, error in
-        if let data, !data.isEmpty { self?.onData?(data) }; if let error { self?.onState?("Chyba čtení: \(error.localizedDescription)") }; if !done { self?.receive() }
-    } }
+
+    func disconnect() {
+        queue.async { [self] in
+            guard let current = connection else { return }
+            close(current, reason: "Odpojeno uživatelem")
+        }
+    }
+
+    private func receive(from current: NWConnection) {
+        current.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self, weak current] data, _, complete, error in
+            guard let self, let current, self.connection === current else { return }
+            if let data, !data.isEmpty { self.onData?(data) }
+            if let error {
+                self.close(current, reason: "Chyba čtení: \(error.localizedDescription)")
+            } else if complete {
+                self.close(current, reason: "Odpojeno: vzdálený přístroj uzavřel TCP (EOF)")
+            } else {
+                self.receive(from: current)
+            }
+        }
+    }
+
+    private func close(_ current: NWConnection, reason: String) {
+        guard connection === current else { return }
+        connection = nil
+        ready = false
+        current.cancel()
+        onState?(reason)
+    }
 }

@@ -26,13 +26,16 @@ struct MeasuredRecord: Identifiable, Codable {
     private var connectedEndpoint = "—"
     private let transport: MiniEXTransport = TCPTransport(); private let decoder = PacketStreamDecoder()
     init() {
-        appendDiagnostic("Aplikace spuštěna, verze 0.9.2 (3)")
+        appendDiagnostic("Aplikace spuštěna, verze 0.9.3 (4)")
         transport.onState = { [weak self] value in Task { @MainActor in
             guard let self else { return }
             self.connectionState = value; self.isConnected = value == "Připojeno"
             self.appendDiagnostic("SOCKET: \(value)")
             if value == "Připojeno" { self.startRemote() }
-            else if self.deviceKeyHeld { self.deviceKeyHeld = false; self.appendDiagnostic("RC KEY: spojení skončilo během stisku") }
+            else {
+                self.status = value
+                if self.deviceKeyHeld { self.deviceKeyHeld = false; self.appendDiagnostic("RC KEY: spojení skončilo během stisku") }
+            }
         } }
         transport.onWrite = { [weak self] count, error in Task { @MainActor in
             guard let self else { return }
