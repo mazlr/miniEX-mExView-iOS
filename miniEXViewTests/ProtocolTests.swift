@@ -45,8 +45,8 @@ final class ProtocolTests: XCTestCase {
     func testAlphaHex() throws {
         let encoded = AlphaHex.encode(Data([0, 0x1f, 0xa5, 0xff]))
         XCTAssertEqual(encoded, "AABPKFPP")
-        let decoded: Data = try AlphaHex.decode("BEEF"[...])
-        XCTAssertEqual(decoded, Data([0x14, 0x4c]))
+        let decoded: Int = try AlphaHex.decode("BEEF"[...])
+        XCTAssertEqual(decoded, 0x144c)
     }
     func testPacketRoundTrip() throws {
         let built = PacketCodec.build(receiver: "a", sender: "b", id: 0x1234, payload: Data("hello".utf8))
