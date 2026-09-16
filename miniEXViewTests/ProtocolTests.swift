@@ -65,7 +65,7 @@ final class ProtocolTests: XCTestCase {
     }
     func testAndroidCapturedKeyPressPacket() throws {
         let cm = CMCodec.encode(target: 6, source: 5, flags: 0x20, id: WireMessage.keyPress)
-        let packet = PacketCodec.build(id: 0x00ab, payload: cm)
+        let packet = PacketCodec.build(type: "0", receiver: "0", sender: "2", id: 0x00ab, payload: cm)
         XCTAssertEqual(String(decoding: packet, as: UTF8.self), "#002 AAKL AO *aAAAGAFCAABADAGED")
         let decoded = try PacketStreamDecoder().append(packet)
         XCTAssertEqual(decoded.count, 1)
@@ -81,10 +81,10 @@ final class ProtocolTests: XCTestCase {
         let message = try XCTUnwrap(CMCodec.decodeAll(cm).first)
         XCTAssertEqual(message.payload, Data([0, 0, 0xf4, 1]))
         XCTAssertEqual(message.targetPID, 1)
-        XCTAssertEqual(String(decoding: PacketCodec.build(id: 0x10ab, payload: cm), as: UTF8.self),
+        XCTAssertEqual(String(decoding: PacketCodec.build(type: "0", receiver: "0", sender: "2", id: 0x10ab, payload: cm), as: UTF8.self),
                        "#002 BAKL BG *aAEABAFAAEBACAAAAPEABAIFJ")
         let redraw = CMCodec.encode(target: 2, source: 5, flags: 0x20, id: WireMessage.redraw)
-        XCTAssertEqual(String(decoding: PacketCodec.build(id: 0x10ac, payload: redraw), as: UTF8.self),
+        XCTAssertEqual(String(decoding: PacketCodec.build(type: "0", receiver: "0", sender: "2", id: 0x10ac, payload: redraw), as: UTF8.self),
                        "#002 BAKM AO *aAAACAFCABAAGAGEE")
     }
     func testFirmwareLayout() {
