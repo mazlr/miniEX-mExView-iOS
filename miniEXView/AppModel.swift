@@ -23,26 +23,69 @@ struct MeasuredRecord: Identifiable, Codable {
     func sendCM(_ id: UInt16, payload: Data = Data(), target: UInt8 = 5) { transport.send(PacketCodec.build(receiver: "a", sender: "b", id: id, payload: CMCodec.encode(target: target, source: 3, id: id, payload: payload))) }
     func startRemote() { sendCM(WireMessage.streamOn); sendCM(WireMessage.redraw) }
     func speed(down: Bool) { sendCM(down ? WireMessage.keyPress : WireMessage.keyRelease) }
-    func refreshSettings() { [WireMessage.getFirmware, .getSerial, .getLanguages, .getBounds, .getParameters].forEach { sendCM($0) }; status = "Načítám nastavení…" }
+    func refreshSettings() {
+        let requests: [UInt16] = [
+            WireMessage.getFirmware,
+            WireMessage.getSerial,
+            WireMessage.getLanguages,
+            WireMessage.getBounds,
+            WireMessage.getParameters
+        ]
+        requests.forEach { sendCM($0) }
+        status = "Načítám nastavení…"
+    }
     func saveSettings() { sendCM(WireMessage.setParameters, payload: parameters.encode()); status = "Nastavení odesláno." }
     func restoreDefaults() { sendCM(WireMessage.defaults); parameters = DeviceParameters(); status = "Výchozí nastavení vyžádáno." }
     func refreshData() { status = "Načítám data…"; sendCM(0x0B01); sendCM(0x0B06); sendCM(0x0501, target: 6) }
     func eraseData() { sendCM(0x0502, target: 6); records = []; status = "Požadavek na smazání odeslán." }
     func demo() {
         isConnected = false; connectionState = "Offline demo"; status = "Ukázkový obsah bez přístroje"
-        pixels = (0..<160*128).map { i in let x = i % 160, y = i / 160; return (x/10 + y/8).isMultiple(of: 2) ? Color(red: 0.04, green: 0.10, blue: 0.13) : Color(red: 0.08, green: 0.25, blue: 0.30) }
-        records = (0..<24).map { .init(index: $0 + 1, timestamp: Date().addingTimeInterval(Double(-$0 * 60)), value: 0.12 + Double($0) * 0.018, alarm: $0 % 9 == 0, mode: $0 % 3, period: 60) }
+        let dark = Color(red: 0.04, green: 0.10, blue: 0.13)
+        let light = Color(red: 0.08, green: 0.25, blue: 0.30)
+        var demoPixels = Array(repeating: dark, count: 160 * 128)
+        for pixelIndex in demoPixels.indices {
+            let x = pixelIndex % 160
+            let y = pixelIndex / 160
+            demoPixels[pixelIndex] = (x / 10 + y / 8).isMultiple(of: 2) ? dark : light
+        }
+        pixels = demoPixels
+        var demoRecords: [MeasuredRecord] = []
+        let now = Date()
+        for itemIndex in 0..<24 {
+            let secondsAgo = TimeInterval(itemIndex * 60)
+            let record = MeasuredRecord(
+                index: itemIndex + 1,
+                timestamp: now.addingTimeInterval(-secondsAgo),
+                value: 0.12 + Double(itemIndex) * 0.018,
+                alarm: itemIndex % 9 == 0,
+                mode: itemIndex % 3,
+                period: 60
+            )
+            demoRecords.append(record)
+        }
+        records = demoRecords
     }
     func exportTSV() -> URL? {
         let f = FileManager.default.temporaryDirectory.appendingPathComponent("miniEX-data.tsv")
-        let df = ISO8601DateFormatter(); let lines = ["Index\tTime\tValue\tAlarm\tMode\tPeriod"] + records.map { "\($0.index)\t\(df.string(from:$0.timestamp))\t\($0.value)\t\($0.alarm ? 1:0)\t\($0.mode)\t\($0.period)" }
+        let df = ISO8601DateFormatter()
+        var lines = ["Index\tTime\tValue\tAlarm\tMode\tPeriod"]
+        for record in records {
+            let alarmValue = record.alarm ? 1 : 0
+            let timestamp = df.string(from: record.timestamp)
+            lines.append("\(record.index)\t\(timestamp)\t\(record.value)\t\(alarmValue)\t\(record.mode)\t\(record.period)")
+        }
         try? lines.joined(separator: "\n").write(to: f, atomically: true, encoding: .utf8); return f
     }
     private func consume(_ data: Data) { do { for packet in try decoder.append(data) { for message in try CMCodec.decodeAll(packet.payload) { handle(message) } } } catch { status = error.localizedDescription } }
     private func handle(_ m: CMMessage) {
         switch m.messageID {
         case WireMessage.getFirmware where m.payload.count >= 2: let w = Int(m.payload[0]) | Int(m.payload[1]) << 8; firmware = "\((w & 0x1f00) >> 8).\(String(format:"%02X", w & 0xff))"
-        case WireMessage.getSerial where m.payload.count >= 4: serial = String(m.payload.prefix(4).enumerated().reduce(UInt32(0)) { $0 | UInt32($1.element) << UInt32($1.offset * 8) })
+        case WireMessage.getSerial where m.payload.count >= 4:
+            var serialValue: UInt32 = 0
+            for byteIndex in 0..<4 {
+                serialValue |= UInt32(m.payload[byteIndex]) << UInt32(byteIndex * 8)
+            }
+            serial = String(serialValue)
         case WireMessage.stream: renderStream(m.payload)
         default: status = "Přijata zpráva 0x\(String(m.messageID, radix: 16))"
         }
@@ -53,6 +96,19 @@ struct MeasuredRecord: Identifiable, Codable {
 struct DeviceParameters {
     var wideZero = 1000.0, wideAlarm = 200.0, advancedZero = 1000.0, advancedAlarm = 200.0, tatpZero = 1000.0, tatpAlarm = 200.0
     var offTime = 600.0, sampling = 15.0, beep = 5.0, alarm = 5.0, irPower = 0.0; var wifi = false; var primaryLanguage = 1; var secondaryLanguage = 1; var mode = 0
-    func encode() -> Data { var words = [wideZero,wideAlarm,offTime*16,sampling*16,beep,alarm,Double((primaryLanguage<<1)|(secondaryLanguage<<4)|(mode<<7)|(wifi ? 1:0)),irPower,advancedZero,advancedAlarm,tatpZero,tatpAlarm,0].map { UInt16(clamping:Int($0)) }; words.append(1); return Data(words.flatMap { [UInt8($0 & 255),UInt8($0 >> 8)] }) }
+    func encode() -> Data {
+        let flags = (primaryLanguage << 1) | (secondaryLanguage << 4) | (mode << 7) | (wifi ? 1 : 0)
+        let rawValues: [Double] = [
+            wideZero, wideAlarm, offTime * 16, sampling * 16, beep, alarm,
+            Double(flags), irPower, advancedZero, advancedAlarm, tatpZero, tatpAlarm, 0
+        ]
+        var words = rawValues.map { UInt16(clamping: Int($0)) }
+        words.append(1)
+        var data = Data(capacity: words.count * 2)
+        for word in words {
+            data.append(UInt8(word & 0xff))
+            data.append(UInt8(word >> 8))
+        }
+        return data
+    }
 }
-
