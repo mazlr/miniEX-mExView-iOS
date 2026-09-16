@@ -17,7 +17,7 @@ struct ContentView: View {
 struct RemoteView: View {
     @EnvironmentObject var model: AppModel; @State private var zoom = 1.0; @State private var touchingDeviceKey = false
     @State private var recording: OfflineRecording = .short
-    var body: some View { VStack(spacing: 14) {
+    var body: some View { ScrollView { VStack(spacing: 14) {
         Text(model.connectionState).font(.caption).foregroundStyle(model.isConnected ? .green : .secondary)
         Group {
             if let image = model.displayImage { Image(uiImage: image).resizable().interpolation(.none) }
@@ -52,7 +52,7 @@ struct RemoteView: View {
         Button("Vyžádat překreslení") { model.sendCM(WireMessage.redraw, target: 2) }
             .disabled(!model.isConnected)
         Text(model.status).font(.footnote).foregroundStyle(.secondary)
-    }.padding().onDisappear { touchingDeviceKey = false; model.releaseDeviceKey() } }
+    }.padding() }.onDisappear { touchingDeviceKey = false; model.releaseDeviceKey() } }
 }
 
 struct SettingsView: View {
