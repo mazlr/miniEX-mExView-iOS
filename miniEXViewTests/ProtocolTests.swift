@@ -9,7 +9,12 @@ final class ProtocolTests: XCTestCase {
             XCTAssertNotNil(RCDisplay(resources: catalog).image())
         }
         var stored = Data(repeating: 0, count: 16)
-        let packed = UInt32(24 << 26 | 9 << 22 | 16 << 17 | 13 << 12 | 42 << 6 | 5)
+        var packed: UInt32 = 24 << 26
+        packed |= 9 << 22
+        packed |= 16 << 17
+        packed |= 13 << 12
+        packed |= 42 << 6
+        packed |= 5
         for i in 0..<4 { stored[i] = UInt8(truncatingIfNeeded: packed >> (8*i)) }
         stored[4] = 37; stored[8] = 80; stored[14] = 0x12
         let record = try StoredRecordCodec.decode(stored, index: 0)
