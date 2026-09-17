@@ -96,4 +96,7 @@ enum WireMessage {
     static let keyPress: UInt16 = 0x0301, keyRelease: UInt16 = 0x0302, redraw: UInt16 = 0x0610
     static let getSerial: UInt16 = 0x0B05, getFirmware: UInt16 = 0x0B06, getLanguages: UInt16 = 0x0B09
     static let getBounds: UInt16 = 0x0520, getParameters: UInt16 = 0x0521, setParameters: UInt16 = 0x0522, defaults: UInt16 = 0x0523
+    // The device sets bit 7 in the response ID while it is busy (Android: 0x05A2).
+    static let setParametersBusy: UInt16 = 0x05A2
+    static let systemOff: UInt16 = 0x0600
 }
