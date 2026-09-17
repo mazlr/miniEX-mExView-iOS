@@ -78,7 +78,7 @@ struct SettingsView: View {
             Picker("Primary language", selection: $model.parameters.primaryLanguage) { ForEach(model.supportedLanguages, id: \.self) { id in Text(model.languageName(id)).tag(id) } }
             Picker("Secondary language", selection: $model.parameters.secondaryLanguage) { ForEach(model.supportedLanguages, id: \.self) { id in Text(model.languageName(id)).tag(id) } }
         }
-        Section("Time and sound") { value("Time to OFF",$model.parameters.offTime); value("Sampling Period",$model.parameters.sampling); value("Beep Volume",$model.parameters.beep); value("Alarm Volume",$model.parameters.alarm); value("IR Sampling Power",$model.parameters.irPower) }
+        Section("Time and sound") { value("Time to OFF",$model.parameters.offTime); value("Sampling Period",$model.parameters.sampling); value("Beep Volume",$model.parameters.beep); value("Alarm Volume",$model.parameters.alarm); Picker("IR Sampling Power", selection:$model.parameters.irPower) { Text("Lower").tag(0.0); Text("Standard").tag(1.0); Text("Higher").tag(2.0); Text("Extreme").tag(3.0) } }
         Section { Button("Restore factory defaults",role:.destructive) { activeField = nil; model.restoreDefaults() }.disabled(!model.isConnected) }
     }.background(KeyboardDismissArea { activeField = nil }) }
     private func threshold(_ title:String,zero:Binding<Double>,alarm:Binding<Double>)->some View { Section(title) { value("Zero threshold",zero,id:title+".zero"); value("Alarm threshold",alarm,id:title+".alarm") } }
@@ -86,9 +86,10 @@ struct SettingsView: View {
 }
 
 struct DataView: View {
-    @EnvironmentObject var model: AppModel; @Binding var shareURL: URL?; @State private var confirmErase=false
-    var body: some View { VStack { HStack { Button("Download") { model.refreshData() }; Button("Export TSV") { shareURL=model.exportTSV() }.disabled(model.records.isEmpty); Button("Erase",role:.destructive) { confirmErase=true }.disabled(!model.isConnected) }.buttonStyle(.bordered).padding(.top)
-        List(model.records) { r in HStack { Text("\(r.index)").frame(width:35,alignment:.leading); VStack(alignment:.leading) { Text(r.timestamp,style:.date); Text(r.timestamp,style:.time).font(.caption); Text("Mode \(r.mode) · \(Double(r.period)/8, specifier: "%.1f") s").font(.caption2) }; Spacer(); Text(r.value,format:.number.precision(.fractionLength(3))); if r.alarm { Image(systemName:"exclamationmark.triangle.fill").foregroundStyle(.red) } } }
+    @EnvironmentObject var model: AppModel; @Binding var shareURL: URL?; @State private var confirmErase=false; @State private var downloadCount = "100"; @State private var newestFirst = true
+    var body: some View { VStack { HStack { Picker("Records", selection:$downloadCount) { Text("All").tag("0"); Text("20").tag("20"); Text("50").tag("50"); Text("100").tag("100"); Text("500").tag("500") }.pickerStyle(.menu); Picker("Order", selection:$newestFirst) { Text("Latest First").tag(true); Text("Oldest First").tag(false) }.pickerStyle(.menu) }
+        HStack { Button("Download") { model.refreshData(maxCount: Int(downloadCount) ?? 0) }; Button("Export TSV") { shareURL=model.exportTSV() }.disabled(model.records.isEmpty); Button("Erase",role:.destructive) { confirmErase=true }.disabled(!model.isConnected) }.buttonStyle(.bordered).padding(.top)
+        List((newestFirst ? Array(model.records.reversed()) : model.records)) { r in HStack { Text("\(r.index)").frame(width:35,alignment:.leading); VStack(alignment:.leading) { Text(r.timestamp,style:.date); Text(r.timestamp,style:.time).font(.caption); Text("Mode \(r.mode) · \(Double(r.period)/8, specifier: "%.1f") s").font(.caption2) }; Spacer(); Text(r.value,format:.number.precision(.fractionLength(3))); if r.alarm { Image(systemName:"exclamationmark.triangle.fill").foregroundStyle(.red) } } }
     }.confirmationDialog("Erase all stored records on the device?",isPresented:$confirmErase,titleVisibility:.visible) { Button("Erase",role:.destructive) { model.eraseData() } } }
 }
 
