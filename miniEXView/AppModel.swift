@@ -12,6 +12,8 @@ struct MeasuredRecord: Identifiable, Codable {
     @AppStorage("deviceID") var deviceID = ""; @AppStorage("rcLanguage") var rcLanguage = "English"
     @Published var connectionState = "Disconnected"; @Published var status = "Ready"; @Published var isConnected = false
     @Published var pixels = Array(repeating: Color.black, count: 160 * 128); @Published var displayImage: UIImage?; @Published var remoteActive = false; @Published var records: [MeasuredRecord] = []
+    @Published private(set) var deviceSupportsRemote = false
+    var canUseRemote: Bool { isConnected && deviceSupportsRemote }
     @Published var parameters = DeviceParameters(); @Published var firmware = "—"; @Published var serial = "—"
     @Published private(set) var diagnosticLines: [String] = []
     @Published private(set) var bytesSent = 0
@@ -25,12 +27,18 @@ struct MeasuredRecord: Identifiable, Codable {
     @Published private(set) var replayTotal = 0
     @Published private(set) var parameterBounds = MiniEXParameterBounds.defaults
     private var firmwareVersion: MiniEXFirmwareVersion?
+    private var detectingDevice = false
+    private var detectionGeneration = 0
+    private var settingsReadRequested = false
     @Published private(set) var supportedLanguages = [0, 1]
     @Published private(set) var supportedLanguageNames = ["Default (English)", "English"]
     func languageName(_ compactID: Int) -> String {
         supportedLanguageNames.indices.contains(compactID) ? supportedLanguageNames[compactID] : "Language \(compactID)"
     }
     private var originalParameters: MiniEXUserParameters?
+    private var pendingParameterPayload: Data?
+    private var pendingParameterModeChanged = false
+    private var parameterWriteRetries = 0
     private lazy var downloader: DataDownload = {
         let value = DataDownload()
         value.send = { [weak self] pid, id, payload in self?.sendCM(id, payload: payload, target: pid, source: 4, flags: 0) }
@@ -58,7 +66,22 @@ struct MeasuredRecord: Identifiable, Codable {
             if self.isOfflineDemo { return }
             self.connectionState = value; self.isConnected = value == "Connected"
             self.appendDiagnostic("SOCKET: \(value)")
-            if value != "Connected" {
+            if value == "Connected" {
+                self.detectingDevice = true
+                self.status = "Detecting device…"
+                self.sendCM(WireMessage.getFirmware, target: 7, source: 3, flags: 0)
+                let generation = self.detectionGeneration
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    guard let self, self.isConnected, self.detectingDevice, self.detectionGeneration == generation else { return }
+                    self.status = "Device identification timed out."
+                    self.appendDiagnostic("DETECTION: still waiting for firmware reply after four seconds")
+                }
+            } else {
+                self.detectionGeneration &+= 1
+                self.detectingDevice = false
+                self.settingsReadRequested = false
+                self.deviceSupportsRemote = false
                 self.remoteActive = false
                 self.display?.clear(); self.displayImage = self.display?.image()
                 self.downloader.cancel()
@@ -93,6 +116,8 @@ struct MeasuredRecord: Identifiable, Codable {
         releaseDeviceKey()
         decoder.reset()
         remoteActive = false
+        detectingDevice = false; detectionGeneration &+= 1; deviceSupportsRemote = false
+        settingsReadRequested = false
         originalParameters = nil; firmwareVersion = nil
         receivedRCFrames = 0
         do { display = RCDisplay(resources: try RCResources.load(language: rcLanguage)); displayImage = display?.image() }
@@ -121,7 +146,7 @@ struct MeasuredRecord: Identifiable, Codable {
         transport.send(packet)
     }
     func startRemote() {
-        guard isConnected else { return }
+        guard isConnected, deviceSupportsRemote else { return }
         // Android MiniExProtocol.remoteOn(): retries=0, timeout=500 ms, little endian.
         sendCM(WireMessage.streamOn, payload: Data([0, 0, 0xf4, 0x01]), target: 1, flags: 0)
         sendCM(WireMessage.redraw, target: 2)
@@ -149,9 +174,22 @@ struct MeasuredRecord: Identifiable, Codable {
     }
     func refreshSettings() {
         guard isConnected else { return }
-        firmwareVersion = nil; originalParameters = nil
-        sendCM(WireMessage.getFirmware, target: 7, source: 3, flags: 0)
+        settingsReadRequested = true
+        originalParameters = nil
+        if !detectingDevice {
+            if let version = firmwareVersion { requestSettings(for: version) }
+            else { sendCM(WireMessage.getFirmware, target: 7, source: 3, flags: 0) }
+        }
         status = "Reading device settings…"
+    }
+    private func requestSettings(for version: MiniEXFirmwareVersion) {
+        sendCM(WireMessage.getSerial, target: 7, source: 3, flags: 0)
+        if version.firmwareCode >= 0x0111 { sendCM(WireMessage.getLanguages, target: 7, source: 3, flags: 0) }
+        else {
+            supportedLanguages = version.firmwareCode >= 0x010c ? [0, 1, 2] : [0, 1]
+            supportedLanguageNames = version.firmwareCode >= 0x010c ? ["Default (English)", "English", "Japanese"] : ["Default (English)", "English"]
+            sendCM(WireMessage.getBounds, target: 5, source: 3, flags: 0)
+        }
     }
     func saveSettings() {
         guard let version = firmwareVersion, let original = originalParameters else {
@@ -171,9 +209,16 @@ struct MeasuredRecord: Identifiable, Codable {
                 throw CodecError.malformed("Unsupported device language")
             }
             let payload = try MiniEXUserParametersCodec.encodeValues(wireValues, dataTypeSize: version.dataTypeSize)
-            sendCM(WireMessage.setParameters, payload: payload, target: 5, source: 3, flags: 0)
+            pendingParameterPayload = payload
+            pendingParameterModeChanged = wireValues.modeIndex != original.modeIndex
+            parameterWriteRetries = 0
+            sendPendingParameterWrite()
             status = "Settings sent; waiting for device confirmation."
         } catch { status = error.localizedDescription }
+    }
+    private func sendPendingParameterWrite() {
+        guard let payload = pendingParameterPayload else { return }
+        sendCM(WireMessage.setParameters, payload: payload, target: 5, source: 3, flags: 0)
     }
     func restoreDefaults() { sendCM(WireMessage.defaults, target: 5, source: 3, flags: 0); status = "Restore defaults requested." }
     func refreshData() {
@@ -330,17 +375,19 @@ struct MeasuredRecord: Identifiable, Codable {
     }
     private func handle(_ m: CMMessage) {
         switch m.messageID {
-        case WireMessage.getFirmware:
+        case WireMessage.getFirmware where m.sourcePID == 7 && m.flags & 0x40 != 0:
             firmwareVersion = try? MiniEXFirmwareVersion.decode(m.payload)
             if let version = firmwareVersion {
                 firmware = "\(version.modelName), FW \(version.displayName)"
-                sendCM(WireMessage.getSerial, target: 7, source: 3, flags: 0)
-                if version.firmwareCode >= 0x0111 { sendCM(WireMessage.getLanguages, target: 7, source: 3, flags: 0) }
-                else {
-                    supportedLanguages = version.firmwareCode >= 0x010c ? [0, 1, 2] : [0, 1]
-                    supportedLanguageNames = version.firmwareCode >= 0x010c ? ["Default (English)", "English", "Japanese"] : ["Default (English)", "English"]
-                    sendCM(WireMessage.getBounds, target: 5, source: 3, flags: 0)
+                let wasDetecting = detectingDevice
+                detectingDevice = false
+                deviceSupportsRemote = version.supportsRemoteControl
+                if wasDetecting {
+                    appendDiagnostic("DETECTED: \(firmware), RC supported=\(deviceSupportsRemote)")
+                    if deviceSupportsRemote { startRemote() }
+                    else { status = "Connected device does not support Remote Control." }
                 }
+                if settingsReadRequested { requestSettings(for: version) }
             }
         case WireMessage.getSerial where m.payload.count >= 4:
             var serialValue: UInt32 = 0
@@ -364,11 +411,38 @@ struct MeasuredRecord: Identifiable, Codable {
                 let values = try MiniEXUserParametersCodec.decodeValues(m.payload, dataTypeSize: size).normalized(to: parameterBounds)
                 originalParameters = values
                 parameters = DeviceParameters(wireValues: values, bounds: parameterBounds)
+                settingsReadRequested = false
                 status = "Device settings read."
             } catch { status = error.localizedDescription }
+        case WireMessage.setParametersBusy:
+            guard pendingParameterPayload != nil else { break }
+            if parameterWriteRetries < 3 {
+                parameterWriteRetries += 1
+                status = "Device busy; retrying parameter write (\(parameterWriteRetries)/3)…"
+                appendDiagnostic("PARAMETERS: device busy, retry \(parameterWriteRetries)")
+                sendPendingParameterWrite()
+            } else {
+                pendingParameterPayload = nil
+                status = "Device remained busy; parameters were not saved."
+                appendDiagnostic("PARAMETERS ERROR: device remained busy after 3 retries")
+            }
         case WireMessage.setParameters:
-            if m.flags & 0x40 != 0 {
-                status = m.flags & 0x80 == 0 && m.payload.first == 0 ? "Settings saved on device." : "Device rejected settings."
+            guard pendingParameterPayload != nil, m.flags & 0x40 != 0 else { break }
+            guard m.flags & 0x80 == 0, m.payload.count == 1, m.payload.first == 0 else {
+                pendingParameterPayload = nil
+                status = "Device rejected settings."
+                appendDiagnostic("PARAMETERS ERROR: invalid write acknowledgement flags=0x\(String(format: "%02X", m.flags)) payload=\(m.payload.count) B")
+                break
+            }
+            let modeChanged = pendingParameterModeChanged
+            pendingParameterPayload = nil
+            parameterWriteRetries = 0
+            if modeChanged {
+                sendCM(WireMessage.systemOff, target: 2, source: 5, flags: 0x20)
+                status = "Parameters saved; device power-off requested for mode change."
+            } else {
+                status = "Parameters saved. Reading them back…"
+                refreshSettings()
             }
         case WireMessage.stream, WireMessage.streamOff: break
         default: status = "Received message 0x\(String(m.messageID, radix: 16))"
