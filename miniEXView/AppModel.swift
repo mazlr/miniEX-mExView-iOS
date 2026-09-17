@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import NetworkExtension
 
 struct MeasuredRecord: Identifiable, Codable {
     let id = UUID(); var index: Int; var timestamp: Date; var value: Double; var alarm: Bool; var mode: Int; var period: Int
@@ -125,6 +126,16 @@ struct MeasuredRecord: Identifiable, Codable {
         connectedEndpoint = "\(selectedHost):\(selectedPort)"
         appendDiagnostic("CONNECT: \(selectedHost):\(selectedPort) mode=\(bridge ? "bridge" : "Wi-Fi")")
         transport.connect(host: selectedHost, port: selectedPort)
+    }
+    func connectViaWiFi(completion: @escaping (Bool) -> Void = { _ in }) {
+        NEHotspotNetwork.fetchCurrent { [weak self] network in
+            let matches = network?.ssid.localizedCaseInsensitiveContains("miniEXPLONIX") == true
+            Task { @MainActor in
+                guard let self else { return }
+                if matches { self.connect(); completion(true) }
+                else { self.status = "Join a Wi-Fi network whose SSID contains miniEXPLONIX first."; self.appendDiagnostic("WIFI CHECK: current SSID is not a miniEXPLONIX access point"); completion(false) }
+            }
+        }
     }
     func disconnect() { releaseDeviceKey(); appendDiagnostic("DISCONNECT: user request"); transport.disconnect() }
     var activeEndpoint: String { connectedEndpoint }
