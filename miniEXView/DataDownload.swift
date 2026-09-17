@@ -41,6 +41,7 @@ enum StoredRecordCodec {
     private var freeAddress: UInt32 = 0
     private var nextIndex = 0
     private var total = 0
+    private var requestedCount = 0
     private var retry = 0
     private var lastCommand: (UInt8, UInt16, Data)?
     private(set) var collected: [MeasuredRecord] = []
@@ -48,8 +49,9 @@ enum StoredRecordCodec {
     var onUpdate: (([MeasuredRecord], String) -> Void)?
     var isBusy: Bool { stage != .idle }
     func cancel() { stage = .idle; lastCommand = nil }
-    func start() {
+    func start(_ maxCount: Int = 0) {
         guard !isBusy else { return }
+        requestedCount = max(0, maxCount)
         collected = []; config = nil; stage = .rtc
         request(4, 0x0401, Data([0, 7]))
     }
@@ -95,6 +97,7 @@ enum StoredRecordCodec {
                   StorageConfig.u32(d, 0) == config.end &+ 1 &- UInt32(config.recordSize) else { throw CodecError.malformed("Invalid final flash record") }
             total = d[4 + config.flagOffset] != 0xff ? config.capacity : Int((freeAddress &- config.start) / UInt32(config.recordSize))
             total = min(max(total, 0), config.capacity)
+            if requestedCount > 0 { total = min(total, requestedCount) }
             nextIndex = 0
             if total == 0 { cancel(); onUpdate?([], "No records on device") }
             else { stage = .records; requestRecord() }
