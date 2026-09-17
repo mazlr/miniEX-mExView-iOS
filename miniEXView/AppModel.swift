@@ -221,9 +221,9 @@ struct MeasuredRecord: Identifiable, Codable {
         sendCM(WireMessage.setParameters, payload: payload, target: 5, source: 3, flags: 0)
     }
     func restoreDefaults() { sendCM(WireMessage.defaults, target: 5, source: 3, flags: 0); status = "Restore defaults requested." }
-    func refreshData() {
+    func refreshData(maxCount: Int = 0) {
         guard isConnected else { status = "Connect to download records."; return }
-        downloader.start(); status = "Reading device storage…"
+        downloader.start(maxCount); status = maxCount > 0 ? "Reading up to \(maxCount) records…" : "Reading device storage…"
     }
     func eraseData() { guard isConnected else { return }; downloader.erase(); status = "Erase requested." }
     func changeRCLanguage() {
