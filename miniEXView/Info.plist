@@ -13,6 +13,7 @@
 <key>LSSupportsOpeningDocumentsInPlace</key><true/>
 <key>LSRequiresIPhoneOS</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>Connect to your miniEXPLONIX device on the local network.</string>
+<key>NSLocationWhenInUseUsageDescription</key><string>Wi-Fi access is used to verify the miniEXPLONIX access point.</string>
 <key>UILaunchScreen</key><dict/>
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
 </dict></plist>
