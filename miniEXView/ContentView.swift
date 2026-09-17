@@ -78,7 +78,7 @@ struct SettingsView: View {
             Picker("Primary language", selection: $model.parameters.primaryLanguage) { ForEach(model.supportedLanguages, id: \.self) { id in Text(model.languageName(id)).tag(id) } }
             Picker("Secondary language", selection: $model.parameters.secondaryLanguage) { ForEach(model.supportedLanguages, id: \.self) { id in Text(model.languageName(id)).tag(id) } }
         }
-        Section("Time and sound") { value("Time to OFF",$model.parameters.offTime); value("Sampling Period",$model.parameters.sampling); value("Beep Volume",$model.parameters.beep); value("Alarm Volume",$model.parameters.alarm); Picker("IR Sampling Power", selection:$model.parameters.irPower) { Text("Lower").tag(0.0); Text("Standard").tag(1.0); Text("Higher").tag(2.0); Text("Extreme").tag(3.0) } }
+        Section("Time and sound") { value("Time to OFF",$model.parameters.offTime); value("Sampling Period",$model.parameters.sampling); value("Beep Volume",$model.parameters.beep); value("Alarm Volume",$model.parameters.alarm); Picker("IR Sampling Power", selection:$model.parameters.irPower) { Text("Lower").tag(-50.0); Text("Standard").tag(0.0); Text("Higher").tag(50.0); Text("Extreme").tag(100.0) } }
         Section { Button("Restore factory defaults",role:.destructive) { activeField = nil; model.restoreDefaults() }.disabled(!model.isConnected) }
     }.background(KeyboardDismissArea { activeField = nil }) }
     private func threshold(_ title:String,zero:Binding<Double>,alarm:Binding<Double>)->some View { Section(title) { value("Zero threshold",zero,id:title+".zero"); value("Alarm threshold",alarm,id:title+".alarm") } }
