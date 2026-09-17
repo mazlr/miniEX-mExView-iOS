@@ -31,7 +31,7 @@ struct RemoteView: View {
         }.aspectRatio(160.0/128.0,contentMode:.fit).background(.black)
             .padding(5).background(RoundedRectangle(cornerRadius: 9).fill(.gray))
             .scaleEffect(zoom).gesture(MagnificationGesture().onChanged { zoom = min(max($0,1),4) })
-        Button(model.remoteActive ? "RC OFF" : "RC ON") { model.toggleRemote() }.buttonStyle(.borderedProminent).disabled(!model.isConnected || !model.deviceSupportsRemote)
+        Button(model.remoteActive ? "RC OFF" : "RC ON") { model.toggleRemote() }.buttonStyle(.borderedProminent).disabled(!model.canUseRemote)
         if model.isOfflineDemo {
             Picker("Recording", selection: $recording) {
                 ForEach(OfflineRecording.allCases) { item in Text(item.title).tag(item) }
