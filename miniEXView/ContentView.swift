@@ -22,6 +22,7 @@ struct ContentView: View {
 
 struct RemoteView: View {
     @EnvironmentObject var model: AppModel; @State private var zoom = 1.0; @State private var touchingDeviceKey = false
+    @State private var showWiFiAlert = false
     @State private var recording: OfflineRecording = .short
     var body: some View { ScrollView { VStack(spacing: 14) {
         if !model.isConnected && !model.isOfflineDemo { Button("Connect via WiFi") { model.connectViaWiFi { if !$0 { showWiFiAlert = true } } }.buttonStyle(.borderedProminent).controlSize(.large) }
