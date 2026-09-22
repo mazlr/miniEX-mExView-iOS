@@ -1,6 +1,43 @@
 import Foundation
 import SwiftUI
 import NetworkExtension
+import CoreLocation
+
+final class WiFiLocationAuthorization: NSObject, CLLocationManagerDelegate {
+    private let manager = CLLocationManager()
+    private var completion: ((Bool) -> Void)?
+
+    override init() {
+        super.init()
+        manager.delegate = self
+    }
+
+    func request(_ completion: @escaping (Bool) -> Void) {
+        switch manager.authorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            completion(true)
+        case .notDetermined:
+            self.completion = completion
+            manager.requestWhenInUseAuthorization()
+        default:
+            completion(false)
+        }
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        guard let completion else { return }
+        switch manager.authorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            self.completion = nil
+            completion(true)
+        case .denied, .restricted:
+            self.completion = nil
+            completion(false)
+        default:
+            break
+        }
+    }
+}
 
 struct MeasuredRecord: Identifiable, Codable {
     let id = UUID(); var index: Int; var timestamp: Date; var value: Double; var alarm: Bool; var mode: Int; var period: Int
@@ -56,6 +93,7 @@ struct MeasuredRecord: Identifiable, Codable {
     private var refreshScheduled = false
     private var receivedRCFrames = 0
     private var successfulWrites = 0
+    private let wifiLocationAuthorization = WiFiLocationAuthorization()
     var diagnosticFileURL: URL { log.url }
     init() {
         do { display = RCDisplay(resources: try RCResources.load(language: rcLanguage)); displayImage = display?.image() }
@@ -128,14 +166,43 @@ struct MeasuredRecord: Identifiable, Codable {
         transport.connect(host: selectedHost, port: selectedPort)
     }
     func connectViaWiFi(completion: @escaping (Bool) -> Void = { _ in }) {
-        NEHotspotNetwork.fetchCurrent { [weak self] network in
-            let matches = network?.ssid.localizedCaseInsensitiveContains("miniEXPLONIX") == true
-            Task { @MainActor in
-                guard let self else { return }
-                if matches { self.connect(); completion(true) }
-                else { self.status = "Join a Wi-Fi network whose SSID contains miniEXPLONIX first."; self.appendDiagnostic("WIFI CHECK: current SSID is not a miniEXPLONIX access point"); completion(false) }
+        if isLoopbackHost(host) {
+            appendDiagnostic("WIFI CHECK: skipped for loopback host")
+            connect()
+            completion(true)
+            return
+        }
+        wifiLocationAuthorization.request { [weak self] authorized in
+            guard let self else { return }
+            guard authorized else {
+                Task { @MainActor in
+                    self.status = "Location access is required to verify the connected Wi-Fi network."
+                    self.appendDiagnostic("WIFI CHECK: location permission unavailable")
+                    completion(false)
+                }
+                return
+            }
+            NEHotspotNetwork.fetchCurrent { [weak self] network in
+                let ssid = network?.ssid
+                let matches = ssid?.localizedCaseInsensitiveContains("miniEXPLONIX") == true
+                Task { @MainActor in
+                    guard let self else { return }
+                    if matches {
+                        self.appendDiagnostic("WIFI CHECK: connected to \(ssid ?? "miniEXPLONIX")")
+                        self.connect()
+                        completion(true)
+                    } else {
+                        self.status = "Join a Wi-Fi network whose SSID contains miniEXPLONIX first."
+                        self.appendDiagnostic("WIFI CHECK: current SSID is \(ssid ?? "unavailable")")
+                        completion(false)
+                    }
+                }
             }
         }
+    }
+    private func isLoopbackHost(_ value: String) -> Bool {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "localhost" || normalized == "::1" || normalized == "[::1]" || normalized.hasPrefix("127.")
     }
     func disconnect() { releaseDeviceKey(); appendDiagnostic("DISCONNECT: user request"); transport.disconnect() }
     var activeEndpoint: String { connectedEndpoint }
