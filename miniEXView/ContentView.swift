@@ -3,7 +3,6 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var model: AppModel; @State private var showConnection = false; @State private var showAbout = false; @State private var shareURL: URL?; @State private var showWiFiAlert = false
     @State private var selectedTab = 0
-    private let wifiSettingsURL = URL(string: "App-Prefs:root=WIFI")!
     var body: some View {
         NavigationView { TabView(selection: $selectedTab) {
             RemoteView().tabItem { Label("Remote Control", systemImage: "display") }.tag(0)
@@ -16,7 +15,7 @@ struct ContentView: View {
             if tab == 1 && model.isConnected { model.refreshSettings() }
         }.onChange(of: model.isConnected) { connected in
             if connected && selectedTab == 1 { model.refreshSettings() }
-        }.sheet(isPresented: $showConnection) { ConnectionView() }.sheet(isPresented: $showAbout) { AboutView() }.sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) { if let shareURL { ShareView(url: shareURL) } }.alert("miniEXPLONIX Wi-Fi required", isPresented: $showWiFiAlert) { Button("Open Wi-Fi Settings") { UIApplication.shared.open(wifiSettingsURL) }; Button("Cancel", role: .cancel) {} } message: { Text("Connect iOS to a Wi-Fi access point whose SSID contains miniEXPLONIX before opening the device socket.") } }
+        }.sheet(isPresented: $showConnection) { ConnectionView() }.sheet(isPresented: $showAbout) { AboutView() }.sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) { if let shareURL { ShareView(url: shareURL) } }.alert("Wi-Fi could not be verified", isPresented: $showWiFiAlert) { Button("Connect anyway") { model.connect() }; Button("Cancel", role: .cancel) {} } message: { Text("If necessary, open Settings → Wi-Fi and select the miniEXPLONIX access point. iOS does not let this app display the system Wi-Fi network list.") } }
     }
 }
 
@@ -69,7 +68,7 @@ struct RemoteView: View {
         Button("Redraw display") { model.sendCM(WireMessage.redraw, target: 2) }
             .disabled(!model.isConnected)
         Text(model.status).font(.footnote).foregroundStyle(.secondary)
-    }.padding() }.onDisappear { touchingDeviceKey = false; model.releaseDeviceKey() }.alert("miniEXPLONIX Wi-Fi required", isPresented: $showWiFiAlert) { Button("Open Wi-Fi Settings") { UIApplication.shared.open(URL(string: "App-Prefs:root=WIFI")!) }; Button("Cancel", role: .cancel) {} } message: { Text("Connect iOS to a Wi-Fi access point whose SSID contains miniEXPLONIX before opening the device socket.") } }
+    }.padding() }.onDisappear { touchingDeviceKey = false; model.releaseDeviceKey() }.alert("Wi-Fi could not be verified", isPresented: $showWiFiAlert) { Button("Connect anyway") { model.connect() }; Button("Cancel", role: .cancel) {} } message: { Text("If necessary, open Settings → Wi-Fi and select the miniEXPLONIX access point. iOS does not let this app display the system Wi-Fi network list.") } }
 }
 
 struct SettingsView: View {
@@ -108,7 +107,7 @@ struct ConnectionView: View {
         Section("Internet bridge") { TextField("Server",text:$model.bridgeHost).autocapitalization(.none); TextField("Port",value:$model.bridgePort,format:.number); TextField("32-character device ID",text:$model.deviceID); Button("Connect via bridge") { model.connect(bridge:true); dismiss() }.disabled(model.deviceID.count != 32) }
         Section("Remote Control") { Picker("RC bitmap language",selection:$model.rcLanguage) { ForEach(["English","Japanese","Arabic","TraditionalChinese","SimplifiedChinese","German","Polish"],id:\.self) { Text($0 == "TraditionalChinese" ? "Traditional Chinese" : $0 == "SimplifiedChinese" ? "Simplified Chinese" : $0).tag($0) } }.onChange(of: model.rcLanguage) { _ in model.changeRCLanguage() } }
         Section { Text("USB connection is unavailable on iOS.").foregroundStyle(.secondary) }
-    }.navigationTitle("Connection").toolbar { Button("Done") { dismiss() } }.alert("miniEXPLONIX Wi-Fi required", isPresented: $showWiFiAlert) { Button("Open Wi-Fi Settings") { UIApplication.shared.open(URL(string: "App-Prefs:root=WIFI")!) }; Button("Cancel", role: .cancel) {} } message: { Text("Connect iOS to a Wi-Fi access point whose SSID contains miniEXPLONIX first.") } } }
+    }.navigationTitle("Connection").toolbar { Button("Done") { dismiss() } }.alert("Wi-Fi could not be verified", isPresented: $showWiFiAlert) { Button("Connect anyway") { model.connect(); dismiss() }; Button("Cancel", role: .cancel) {} } message: { Text("If necessary, open Settings → Wi-Fi and select the miniEXPLONIX access point. iOS does not let this app display the system Wi-Fi network list.") } } }
 }
 
 struct ShareView: UIViewControllerRepresentable { let url:URL; func makeUIViewController(context:Context)->UIActivityViewController { UIActivityViewController(activityItems:[url],applicationActivities:nil) }; func updateUIViewController(_ uiViewController:UIActivityViewController,context:Context){} }

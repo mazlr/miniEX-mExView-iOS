@@ -1,43 +1,6 @@
 import Foundation
 import SwiftUI
 import NetworkExtension
-import CoreLocation
-
-final class WiFiLocationAuthorization: NSObject, CLLocationManagerDelegate {
-    private let manager = CLLocationManager()
-    private var completion: ((Bool) -> Void)?
-
-    override init() {
-        super.init()
-        manager.delegate = self
-    }
-
-    func request(_ completion: @escaping (Bool) -> Void) {
-        switch manager.authorizationStatus {
-        case .authorizedAlways, .authorizedWhenInUse:
-            completion(true)
-        case .notDetermined:
-            self.completion = completion
-            manager.requestWhenInUseAuthorization()
-        default:
-            completion(false)
-        }
-    }
-
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        guard let completion else { return }
-        switch manager.authorizationStatus {
-        case .authorizedAlways, .authorizedWhenInUse:
-            self.completion = nil
-            completion(true)
-        case .denied, .restricted:
-            self.completion = nil
-            completion(false)
-        default:
-            break
-        }
-    }
-}
 
 struct MeasuredRecord: Identifiable, Codable {
     let id = UUID(); var index: Int; var timestamp: Date; var value: Double; var alarm: Bool; var mode: Int; var period: Int
@@ -93,7 +56,6 @@ struct MeasuredRecord: Identifiable, Codable {
     private var refreshScheduled = false
     private var receivedRCFrames = 0
     private var successfulWrites = 0
-    private let wifiLocationAuthorization = WiFiLocationAuthorization()
     var diagnosticFileURL: URL { log.url }
     init() {
         do { display = RCDisplay(resources: try RCResources.load(language: rcLanguage)); displayImage = display?.image() }
@@ -172,30 +134,20 @@ struct MeasuredRecord: Identifiable, Codable {
             completion(true)
             return
         }
-        wifiLocationAuthorization.request { [weak self] authorized in
-            guard let self else { return }
-            guard authorized else {
-                Task { @MainActor in
-                    self.status = "Location access is required to verify the connected Wi-Fi network."
-                    self.appendDiagnostic("WIFI CHECK: location permission unavailable")
+        NEHotspotNetwork.fetchCurrent { [weak self] network in
+            let ssid = network?.ssid
+            let normalized = ssid?.lowercased() ?? ""
+            let matches = normalized.contains("miniexplonix") || normalized.contains("miniexplox")
+            Task { @MainActor in
+                guard let self else { return }
+                if matches {
+                    self.appendDiagnostic("WIFI CHECK: connected to \(ssid ?? "miniEXPLONIX")")
+                    self.connect()
+                    completion(true)
+                } else {
+                    self.status = "Wi-Fi could not be verified. You can still connect manually."
+                    self.appendDiagnostic("WIFI CHECK: current SSID is \(ssid ?? "unavailable"); location permission was not requested")
                     completion(false)
-                }
-                return
-            }
-            NEHotspotNetwork.fetchCurrent { [weak self] network in
-                let ssid = network?.ssid
-                let matches = ssid?.localizedCaseInsensitiveContains("miniEXPLONIX") == true
-                Task { @MainActor in
-                    guard let self else { return }
-                    if matches {
-                        self.appendDiagnostic("WIFI CHECK: connected to \(ssid ?? "miniEXPLONIX")")
-                        self.connect()
-                        completion(true)
-                    } else {
-                        self.status = "Join a Wi-Fi network whose SSID contains miniEXPLONIX first."
-                        self.appendDiagnostic("WIFI CHECK: current SSID is \(ssid ?? "unavailable")")
-                        completion(false)
-                    }
                 }
             }
         }
