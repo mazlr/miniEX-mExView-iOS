@@ -112,24 +112,24 @@ jobs:
           test -f "$APP_PATH/RC-long.txt"
           APP_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")
           BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")
-          IPA_BASENAME="miniEXView-v${APP_VERSION}-build${BUILD_NUMBER}-iPhone-unsigned-${CONFIGURATION}"
-          echo "IPA_BASENAME=$IPA_BASENAME" >> "$GITHUB_ENV"
+          ARTIFACT_NAME="miniEXView-v${APP_VERSION}-build${BUILD_NUMBER}-iPhone-unsigned-${CONFIGURATION}"
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
           mkdir -p Payload
           ditto "$APP_PATH" Payload/miniEXView.app
-          ditto -c -k --sequesterRsrc --keepParent Payload "${IPA_BASENAME}.ipa"
+          ditto -c -k --sequesterRsrc --keepParent Payload miniEXView-unsigned.ipa
 
       - name: Verify IPA executable
         run: |
           rm -rf verify-ipa
-          ditto -x -k "${IPA_BASENAME}.ipa" verify-ipa
+          ditto -x -k miniEXView-unsigned.ipa verify-ipa
           test -f verify-ipa/Payload/miniEXView.app/miniEXView
           file verify-ipa/Payload/miniEXView.app/miniEXView | grep -q 'arm64'
 
       - name: Upload unsigned iPhone IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.IPA_BASENAME }}
-          path: ${{ env.IPA_BASENAME }}.ipa
+          name: ${{ env.ARTIFACT_NAME }}
+          path: miniEXView-unsigned.ipa
           if-no-files-found: error
           retention-days: 30
 

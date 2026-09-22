@@ -1,6 +1,43 @@
 import Foundation
 import SwiftUI
 import NetworkExtension
+import CoreLocation
+
+final class WiFiLocationAuthorization: NSObject, CLLocationManagerDelegate {
+    private let manager = CLLocationManager()
+    private var completion: ((Bool) -> Void)?
+
+    override init() {
+        super.init()
+        manager.delegate = self
+    }
+
+    func request(_ completion: @escaping (Bool) -> Void) {
+        switch manager.authorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            completion(true)
+        case .notDetermined:
+            self.completion = completion
+            manager.requestWhenInUseAuthorization()
+        default:
+            completion(false)
+        }
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        guard let completion else { return }
+        switch manager.authorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            self.completion = nil
+            completion(true)
+        case .denied, .restricted:
+            self.completion = nil
+            completion(false)
+        default:
+            break
+        }
+    }
+}
 
 struct MeasuredRecord: Identifiable, Codable {
     let id = UUID(); var index: Int; var timestamp: Date; var value: Double; var alarm: Bool; var mode: Int; var period: Int
@@ -23,6 +60,8 @@ struct MeasuredRecord: Identifiable, Codable {
     @Published private(set) var packetCount = 0
     @Published private(set) var cmMessageCount = 0
     @Published private(set) var isOfflineDemo = false
+    @Published private(set) var lastDetectedSSID: String?
+    @Published private(set) var wifiSSIDUnavailable = false
     @Published private(set) var replayPlaying = false
     @Published private(set) var replayProgress = 0
     @Published private(set) var replayTotal = 0
@@ -56,6 +95,16 @@ struct MeasuredRecord: Identifiable, Codable {
     private var refreshScheduled = false
     private var receivedRCFrames = 0
     private var successfulWrites = 0
+    private let wifiLocationAuthorization = WiFiLocationAuthorization()
+    var wifiAlertMessage: String {
+        if let lastDetectedSSID {
+            return "Current Wi-Fi: \(lastDetectedSSID). Select a miniEXPLONIX access point, or continue anyway."
+        }
+        if wifiSSIDUnavailable {
+            return "The current Wi-Fi name is unavailable. Allow precise location access to identify it, or continue anyway."
+        }
+        return "Select a miniEXPLONIX access point, or continue anyway."
+    }
     var diagnosticFileURL: URL { log.url }
     init() {
         do { display = RCDisplay(resources: try RCResources.load(language: rcLanguage)); displayImage = display?.image() }
@@ -134,20 +183,35 @@ struct MeasuredRecord: Identifiable, Codable {
             completion(true)
             return
         }
-        NEHotspotNetwork.fetchCurrent { [weak self] network in
-            let ssid = network?.ssid
-            let normalized = ssid?.lowercased() ?? ""
-            let matches = normalized.contains("miniexplonix") || normalized.contains("miniexplox")
-            Task { @MainActor in
-                guard let self else { return }
-                if matches {
-                    self.appendDiagnostic("WIFI CHECK: connected to \(ssid ?? "miniEXPLONIX")")
-                    self.connect()
-                    completion(true)
-                } else {
-                    self.status = "Wi-Fi could not be verified. You can still connect manually."
-                    self.appendDiagnostic("WIFI CHECK: current SSID is \(ssid ?? "unavailable"); location permission was not requested")
+        wifiLocationAuthorization.request { [weak self] authorized in
+            guard let self else { return }
+            guard authorized else {
+                Task { @MainActor in
+                    self.lastDetectedSSID = nil
+                    self.wifiSSIDUnavailable = true
+                    self.status = "Location access is required to identify the current Wi-Fi."
+                    self.appendDiagnostic("WIFI CHECK: location permission unavailable")
                     completion(false)
+                }
+                return
+            }
+            NEHotspotNetwork.fetchCurrent { [weak self] network in
+                let ssid = network?.ssid
+                let normalized = ssid?.lowercased() ?? ""
+                let matches = normalized.contains("miniexplonix") || normalized.contains("miniexplox")
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.lastDetectedSSID = ssid
+                    self.wifiSSIDUnavailable = ssid == nil
+                    if matches {
+                        self.appendDiagnostic("WIFI CHECK: connected to \(ssid ?? "miniEXPLONIX")")
+                        self.connect()
+                        completion(true)
+                    } else {
+                        self.status = ssid.map { "Wrong Wi-Fi: \($0)" } ?? "The current Wi-Fi name is unavailable."
+                        self.appendDiagnostic("WIFI CHECK: current SSID is \(ssid ?? "unavailable")")
+                        completion(false)
+                    }
                 }
             }
         }

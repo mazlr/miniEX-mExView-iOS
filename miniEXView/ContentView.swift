@@ -1,8 +1,11 @@
 import SwiftUI
+import Darwin
 
 struct ContentView: View {
-    @EnvironmentObject var model: AppModel; @State private var showConnection = false; @State private var showAbout = false; @State private var shareURL: URL?; @State private var showWiFiAlert = false
+    @EnvironmentObject var model: AppModel; @State private var showConnection = false; @State private var showAppSettings = false; @State private var showAbout = false; @State private var shareURL: URL?; @State private var showWiFiAlert = false
+    @AppStorage("appAppearance") private var appAppearance = "system"
     @State private var selectedTab = 0
+    private var preferredColorScheme: ColorScheme? { appAppearance == "light" ? .light : appAppearance == "dark" ? .dark : nil }
     var body: some View {
         NavigationView { TabView(selection: $selectedTab) {
             RemoteView().tabItem { Label("Remote Control", systemImage: "display") }.tag(0)
@@ -10,12 +13,12 @@ struct ContentView: View {
             DataView(shareURL: $shareURL).tabItem { Label("Data", systemImage: "tablecells") }.tag(2)
             DiagnosticsView().tabItem { Label("Diagnostics", systemImage: "waveform.path.ecg") }.tag(3)
         }.navigationTitle("miniEXPLONIX View").toolbar { ToolbarItem(placement: .navigationBarTrailing) { Menu {
-            Button("Connection") { showConnection = true }; Button("About") { showAbout = true }; Button("Offline demo") { model.demo() }; Divider(); Button(model.isConnected ? "Disconnect" : "Connect via Wi-Fi") { model.isConnected ? model.disconnect() : model.connectViaWiFi { if !$0 { showWiFiAlert = true } } }
+            Button("Connection") { showConnection = true }; Button("App Settings") { showAppSettings = true }; Button("Offline demo") { model.demo() }; Button(model.isConnected ? "Disconnect" : "Connect via Wi-Fi") { model.isConnected ? model.disconnect() : model.connectViaWiFi { if !$0 { showWiFiAlert = true } } }; Divider(); Button("About") { showAbout = true }; Button("EXIT", role: .destructive) { model.disconnect(); exit(EXIT_SUCCESS) }
         } label: { Image(systemName: "ellipsis.circle") } } }.onChange(of: selectedTab) { tab in
             if tab == 1 && model.isConnected { model.refreshSettings() }
         }.onChange(of: model.isConnected) { connected in
             if connected && selectedTab == 1 { model.refreshSettings() }
-        }.sheet(isPresented: $showConnection) { ConnectionView() }.sheet(isPresented: $showAbout) { AboutView() }.sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) { if let shareURL { ShareView(url: shareURL) } }.alert("Wi-Fi could not be verified", isPresented: $showWiFiAlert) { Button("Connect anyway") { model.connect() }; Button("Cancel", role: .cancel) {} } message: { Text("If necessary, open Settings → Wi-Fi and select the miniEXPLONIX access point. iOS does not let this app display the system Wi-Fi network list.") } }
+        }.sheet(isPresented: $showConnection) { ConnectionView() }.sheet(isPresented: $showAppSettings) { AppSettingsView() }.sheet(isPresented: $showAbout) { AboutView() }.sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) { if let shareURL { ShareView(url: shareURL) } }.alert("Wi-Fi could not be verified", isPresented: $showWiFiAlert) { Button("Connect anyway") { model.connect() }; Button("Cancel", role: .cancel) {} } message: { Text(model.wifiAlertMessage) } }.preferredColorScheme(preferredColorScheme) }
     }
 }
 
@@ -68,7 +71,7 @@ struct RemoteView: View {
         Button("Redraw display") { model.sendCM(WireMessage.redraw, target: 2) }
             .disabled(!model.isConnected)
         Text(model.status).font(.footnote).foregroundStyle(.secondary)
-    }.padding() }.onDisappear { touchingDeviceKey = false; model.releaseDeviceKey() }.alert("Wi-Fi could not be verified", isPresented: $showWiFiAlert) { Button("Connect anyway") { model.connect() }; Button("Cancel", role: .cancel) {} } message: { Text("If necessary, open Settings → Wi-Fi and select the miniEXPLONIX access point. iOS does not let this app display the system Wi-Fi network list.") } }
+    }.padding() }.onDisappear { touchingDeviceKey = false; model.releaseDeviceKey() }.alert("Wi-Fi could not be verified", isPresented: $showWiFiAlert) { Button("Connect anyway") { model.connect() }; Button("Cancel", role: .cancel) {} } message: { Text(model.wifiAlertMessage) } }
 }
 
 struct SettingsView: View {
@@ -97,7 +100,7 @@ struct DataView: View {
     @EnvironmentObject var model: AppModel; @Binding var shareURL: URL?; @State private var confirmErase=false; @State private var downloadCount = "100"; @State private var newestFirst = true
     var body: some View { VStack { HStack { Picker("Records", selection:$downloadCount) { Text("All").tag("0"); Text("20").tag("20"); Text("50").tag("50"); Text("100").tag("100"); Text("500").tag("500") }.pickerStyle(.menu); Picker("Order", selection:$newestFirst) { Text("Latest First").tag(true); Text("Oldest First").tag(false) }.pickerStyle(.menu) }
         HStack { Button("Download") { model.refreshData(maxCount: Int(downloadCount) ?? 0) }; Button("Export TSV") { shareURL=model.exportTSV() }.disabled(model.records.isEmpty); Button("Erase",role:.destructive) { confirmErase=true }.disabled(!model.isConnected) }.buttonStyle(.bordered).padding(.top)
-        List((newestFirst ? Array(model.records.reversed()) : model.records)) { r in HStack { Text("\(r.index)").frame(width:35,alignment:.leading); VStack(alignment:.leading) { Text(r.timestamp,style:.date); Text(r.timestamp,style:.time).font(.caption); Text("Mode \(r.mode) · \(Double(r.period)/8, specifier: "%.1f") s").font(.caption2) }; Spacer(); Text(r.value,format:.number.precision(.fractionLength(3))); if r.alarm { Image(systemName:"exclamationmark.triangle.fill").foregroundStyle(.red) } } }
+        List((newestFirst ? model.records : Array(model.records.reversed()))) { r in HStack { Text("\(r.index)").frame(width:35,alignment:.leading); VStack(alignment:.leading) { Text(r.timestamp,style:.date); Text(r.timestamp,style:.time).font(.caption); Text("Mode \(r.mode) · \(Double(r.period)/8, specifier: "%.1f") s").font(.caption2) }; Spacer(); Text(r.value,format:.number.precision(.fractionLength(3))); if r.alarm { Image(systemName:"exclamationmark.triangle.fill").foregroundStyle(.red) } } }
     }.confirmationDialog("Erase all stored records on the device?",isPresented:$confirmErase,titleVisibility:.visible) { Button("Erase",role:.destructive) { model.eraseData() } } }
 }
 
@@ -105,9 +108,18 @@ struct ConnectionView: View {
     @EnvironmentObject var model: AppModel; @Environment(\.dismiss) var dismiss; @State private var showWiFiAlert = false
     var body: some View { NavigationView { Form { Section("Wi‑Fi / TCP") { TextField("IP address",text:$model.host).autocapitalization(.none).keyboardType(.numbersAndPunctuation); TextField("Port",value:$model.port,format:.number).keyboardType(.numberPad); Button("Connect") { model.connectViaWiFi { if $0 { dismiss() } else { showWiFiAlert = true } } } }
         Section("Internet bridge") { TextField("Server",text:$model.bridgeHost).autocapitalization(.none); TextField("Port",value:$model.bridgePort,format:.number); TextField("32-character device ID",text:$model.deviceID); Button("Connect via bridge") { model.connect(bridge:true); dismiss() }.disabled(model.deviceID.count != 32) }
-        Section("Remote Control") { Picker("RC bitmap language",selection:$model.rcLanguage) { ForEach(["English","Japanese","Arabic","TraditionalChinese","SimplifiedChinese","German","Polish"],id:\.self) { Text($0 == "TraditionalChinese" ? "Traditional Chinese" : $0 == "SimplifiedChinese" ? "Simplified Chinese" : $0).tag($0) } }.onChange(of: model.rcLanguage) { _ in model.changeRCLanguage() } }
         Section { Text("USB connection is unavailable on iOS.").foregroundStyle(.secondary) }
-    }.navigationTitle("Connection").toolbar { Button("Done") { dismiss() } }.alert("Wi-Fi could not be verified", isPresented: $showWiFiAlert) { Button("Connect anyway") { model.connect(); dismiss() }; Button("Cancel", role: .cancel) {} } message: { Text("If necessary, open Settings → Wi-Fi and select the miniEXPLONIX access point. iOS does not let this app display the system Wi-Fi network list.") } } }
+    }.navigationTitle("Connection").toolbar { Button("Done") { dismiss() } }.alert("Wi-Fi could not be verified", isPresented: $showWiFiAlert) { Button("Connect anyway") { model.connect(); dismiss() }; Button("Cancel", role: .cancel) {} } message: { Text(model.wifiAlertMessage) } } }
+}
+
+struct AppSettingsView: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("appAppearance") private var appAppearance = "system"
+    var body: some View { NavigationView { Form {
+        Section("Remote Control") { Picker("RC display language", selection: $model.rcLanguage) { ForEach(["English","Japanese","Arabic","TraditionalChinese","SimplifiedChinese","German","Polish"], id: \.self) { Text($0 == "TraditionalChinese" ? "Traditional Chinese" : $0 == "SimplifiedChinese" ? "Simplified Chinese" : $0).tag($0) } }.onChange(of: model.rcLanguage) { _ in model.changeRCLanguage() } }
+        Section("Appearance") { Picker("Color theme", selection: $appAppearance) { Text("Follow System").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark") }.pickerStyle(.segmented) }
+    }.navigationTitle("App Settings").toolbar { Button("Done") { dismiss() } } } }
 }
 
 struct ShareView: UIViewControllerRepresentable { let url:URL; func makeUIViewController(context:Context)->UIActivityViewController { UIActivityViewController(activityItems:[url],applicationActivities:nil) }; func updateUIViewController(_ uiViewController:UIActivityViewController,context:Context){} }
