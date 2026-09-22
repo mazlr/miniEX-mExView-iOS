@@ -20,7 +20,6 @@ struct ContentView: View {
             if connected && selectedTab == 1 { model.refreshSettings() }
         }.sheet(isPresented: $showConnection) { ConnectionView() }.sheet(isPresented: $showAppSettings) { AppSettingsView() }.sheet(isPresented: $showAbout) { AboutView() }.sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) { if let shareURL { ShareView(url: shareURL) } }.alert("Wi-Fi could not be verified", isPresented: $showWiFiAlert) { Button("Connect anyway") { model.connect() }; Button("Cancel", role: .cancel) {} } message: { Text(model.wifiAlertMessage) } }.preferredColorScheme(preferredColorScheme) }
     }
-}
 
 struct RemoteView: View {
     @EnvironmentObject var model: AppModel; @State private var zoom = 1.0; @State private var touchingDeviceKey = false
